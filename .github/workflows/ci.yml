@@ -18,20 +18,15 @@ jobs:
     name: build and test
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: src
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
           # Follow the toolchain go.mod already declares rather than pinning a
-          # second version here that can drift out of step with it. Paths for
-          # action inputs are workspace-relative; `defaults.run` only applies
-          # to `run` steps.
-          go-version-file: src/go.mod
-          cache-dependency-path: src/go.sum
+          # second version here that can drift out of step with it.
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: gofmt
         run: |

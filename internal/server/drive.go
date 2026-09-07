@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"spacemouse-bridge/internal/nav"
-	"spacemouse-bridge/internal/navlib"
-	"spacemouse-bridge/internal/spacenav"
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // ParseButtons reads a mapping such as "0=fit,1=menu".

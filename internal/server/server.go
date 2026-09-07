@@ -13,8 +13,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"spacemouse-bridge/internal/navlib"
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // DefaultHost and DefaultPort are hardcoded in the client library

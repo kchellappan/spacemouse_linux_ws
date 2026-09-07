@@ -20,9 +20,9 @@ import (
 	"syscall"
 	"time"
 
-	"spacemouse-bridge/internal/nav"
-	"spacemouse-bridge/internal/server"
-	"spacemouse-bridge/internal/spacenav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 )
 
 var version = "dev"

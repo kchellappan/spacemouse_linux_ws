@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"spacemouse-bridge/internal/navlib"
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // Probe reads the client's navlib properties and reports what it implements.

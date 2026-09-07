@@ -33,17 +33,16 @@ is mode 0600, and never leaves it. See
 ## Layout
 
 ```
-src/       Go source (module rooted here)
-  cmd/spacemouse-bridge   the binary
-  internal/spacenav       spacenavd client, axis calibration
-  internal/nav            the navigation model (device motion -> camera)
-  internal/wamp           WAMP v1 session
-  internal/navlib         navlib property model, matrix conventions
-  internal/server         WSS server, nlproxy endpoint, the live drive loop
-  internal/certs          CA/leaf generation and NSS trust injection
-web/testpage             dependency-free harness driving a wireframe cube
-scripts/                 dev certificate and run helpers
-docs/                    what we learned, one file per topic
+cmd/spacemouse-bridge   the binary
+internal/spacenav       spacenavd client, axis calibration
+internal/nav            the navigation model (device motion -> camera)
+internal/wamp           WAMP v1 session
+internal/navlib         navlib property model, matrix conventions
+internal/server         WSS server, nlproxy endpoint, the live drive loop
+internal/certs          CA/leaf generation and NSS trust injection
+web/testpage            dependency-free harness driving a wireframe cube
+scripts/                dev certificate and run helpers
+docs/                   what we learned, one file per topic
 ```
 
 Start with [docs/README.md](docs/README.md) — it indexes nine topic documents
@@ -56,9 +55,13 @@ Requires Go 1.24+ and a running `spacenavd`.
 
 ```sh
 sudo apt install spacenavd libnss3-tools
-cd src && go build -o ../bin/spacemouse-bridge ./cmd/spacemouse-bridge
+go build -o bin/spacemouse-bridge ./cmd/spacemouse-bridge
 go test ./...
 ```
+
+Building from source is for development. The supported way to install is the
+`.deb` on the [Releases](https://github.com/kchellappan/spacemouse_linux_ws/releases)
+page, which also pulls in `spacenavd` and sets up the user service.
 
 ## Running (development)
 
