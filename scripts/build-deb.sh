@@ -42,7 +42,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
 	go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
 	-o dist/spacemouse-bridge ./cmd/spacemouse-bridge
 
-VERSION="$VERSION" ARCH="$ARCH" \
+# GOTOOLCHAIN=auto only for nfpm: it requires a newer Go than this project
+# does, and setup-go pins GOTOOLCHAIN=local, which turns that into a hard
+# failure instead of a toolchain download. The bridge itself is still built
+# with the toolchain go.mod declares, just above.
+VERSION="$VERSION" ARCH="$ARCH" GOTOOLCHAIN=auto \
 	go run "github.com/goreleaser/nfpm/v2/cmd/nfpm@$NFPM_VERSION" package \
 	--config packaging/nfpm.yaml \
 	--packager deb \
