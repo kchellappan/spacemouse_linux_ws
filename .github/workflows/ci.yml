@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a PR makes the in-flight run for that branch redundant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          # Follow the toolchain go.mod already declares rather than pinning a
+          # second version here that can drift out of step with it. Paths for
+          # action inputs are workspace-relative; `defaults.run` only applies
+          # to `run` steps.
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      # -race because the bridge is concurrent by nature: the WAMP read loop,
+      # the spacenavd reader and the drive loop all touch shared state, and a
+      # deadlock there is the failure mode we most care about catching.
+      - name: test
+        run: go test -race ./...
