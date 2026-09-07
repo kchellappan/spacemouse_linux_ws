@@ -100,10 +100,30 @@ Onshape gates on neither platform nor engine.
 ## Observed protocol facts
 
 - Onshape identifies itself as `name: "Onshape"` in the `create 3dcontroller`
-  info object (known from `spacenav-ws`'s whitelist).
+  info object (known from `spacenav-ws`'s whitelist, confirmed on the wire).
 - It honours the `port` field returned by the discovery endpoint.
 - Discovery and socket upgrade occur within the same second.
 - It uses the modern matrix layout — translation at flat indices 12–14 (doc 03).
+
+### Live handshake, 2026-09-07
+
+First measurement against a real Onshape document, from the packaged service:
+
+```
+msg=discovery origin=https://cad.onshape.com
+msg="client connected" origin=https://cad.onshape.com subprotocol=wamp
+msg="3dmouse created" connexion=mouse-d5imn6af95 clientLibVersion=0.6.0
+msg="3dcontroller created" instance=ctl-gilplq042k client=Onshape \
+    clientVersion=0.6 matrixLayout=column-major(12,13,14) frameTiming=true
+msg="controller subscribed" topic=3dconnexion:3dcontroller/ctl-gilplq042k
+msg="navigation active" client=Onshape frameRate=60 mode=object
+msg="client frame timing" clientDriven=true
+```
+
+Discovery to navigating: 16 ms. Onshape runs **0.6.0**, older than the SDK
+sample's 0.8.1 but past the v0.5 layout break, and it drives its own frame
+clock. Reloading the page produces a fresh `connexion` and `instance` id and a
+complete re-handshake, consistent with per-connection state (doc 01).
 
 ## If Onshape regresses
 

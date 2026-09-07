@@ -85,6 +85,15 @@ type Client struct {
 	closeOnce sync.Once
 	done      chan struct{}
 
+	// dead is closed when the read loop stops for any reason; readErr says
+	// why, and is nil when Close caused it. A caller that navigates from the
+	// latch would otherwise never notice the daemon going away — the latch
+	// keeps returning its last value forever.
+	deadOnce sync.Once
+	dead     chan struct{}
+	errMu    sync.Mutex
+	readErr  error
+
 	dropped uint64
 }
 
@@ -113,6 +122,7 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 			log:    log,
 			events: make(chan Event, 128),
 			done:   make(chan struct{}),
+			dead:   make(chan struct{}),
 		}
 		go c.readLoop()
 		return c, nil
@@ -123,6 +133,27 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 			candidates, lastErr)
 	}
 	return nil, fmt.Errorf("connecting to spacenavd: %w", lastErr)
+}
+
+// Dead is closed when the connection to spacenavd ends, whether because Close
+// was called or because the daemon went away. Err distinguishes the two.
+func (c *Client) Dead() <-chan struct{} { return c.dead }
+
+// Err reports why the connection ended, or nil if it is still up or was closed
+// deliberately.
+func (c *Client) Err() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	return c.readErr
+}
+
+func (c *Client) markDead(err error) {
+	c.deadOnce.Do(func() {
+		c.errMu.Lock()
+		c.readErr = err
+		c.errMu.Unlock()
+		close(c.dead)
+	})
 }
 
 // Events yields device events. Motion events may be dropped if the consumer
@@ -157,6 +188,7 @@ func (c *Client) readLoop() {
 	for {
 		select {
 		case <-c.done:
+			c.markDead(nil)
 			return
 		default:
 		}
@@ -164,9 +196,13 @@ func (c *Client) readLoop() {
 		if _, err := io.ReadFull(c.conn, buf); err != nil {
 			select {
 			case <-c.done: // expected: Close was called
+				c.markDead(nil)
 			default:
-				if !errors.Is(err, net.ErrClosed) {
+				if errors.Is(err, net.ErrClosed) {
+					c.markDead(nil)
+				} else {
 					c.log.Warn("spacenavd read failed", "err", err)
+					c.markDead(err)
 				}
 			}
 			return

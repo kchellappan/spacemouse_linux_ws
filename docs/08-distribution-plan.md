@@ -187,15 +187,37 @@ GitHub Release carrying the same `.deb` artifact CI built and installed. It
 refuses to publish if the package version does not match the tag, which is what
 a shallow clone or a missing tag would otherwise produce silently.
 
+### Device loss
+
+The first version of this section claimed that unplugging the SpaceMouse ends
+the process. **That is wrong, and the correction is worth keeping.**
+
+Measured 2026-09-07 on the packaged service: unplugging and replugging the
+device changed nothing. `NRestarts=0`, one PID across the whole session, no
+reconnect in the journal, navigation resumed by itself. spacenavd owns the
+evdev node and holds its socket open across hotplug, so the event stream goes
+quiet and then resumes. Building on the daemon rather than raw evdev (doc 05)
+bought hotplug handling that was never written.
+
+What *is* fragile is losing spacenavd itself. The read loop ends, the drive
+loop returns as soon as its event channel closes, and — before the fix — the
+process kept listening. A live service, browsers connecting happily, and a puck
+that does nothing: the worst available failure, because nothing restarts and
+the only clue is one `WARN`. `spacenav.Client` now exposes `Dead()` and `Err()`,
+and the bridge exits non-zero when the daemon goes away, so `Restart=always`
+reconnects. `TestDeadFiresWhenTheDaemonHangsUp` pins the signal.
+
+Startup is unchanged: drive mode waits 30 seconds for the socket, then exits
+and lets the unit retry. `StartLimitIntervalSec=0` keeps systemd retrying
+rather than giving up after five attempts.
+
 ### Known gaps
 
-- The service exits if the SpaceMouse is absent for more than 30 seconds at
-  start, and systemd restarts it every 10 seconds thereafter
-  (`StartLimitIntervalSec=0` keeps it retrying instead of giving up). A device
-  unplugged *while running* ends the process the same way. In-process
-  reconnection would be better than a restart loop.
 - amd64 only. `ARCH=arm64 scripts/build-deb.sh` works; nothing publishes it.
 - `preremove` cannot stop instances already running in user sessions.
+- Exiting on daemon loss costs any connected browser its socket. In-process
+  reconnection would be gentler, but a restart is honest and the page
+  re-handshakes on its own (doc 07).
 
 ## Licensing
 

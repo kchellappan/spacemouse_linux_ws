@@ -350,3 +350,65 @@ func TestDetectDeflectionTimesOut(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoDeflection", err)
 	}
 }
+
+// hangUpDaemon accepts one connection and immediately drops it, the way
+// spacenavd would if it were restarted underneath us.
+func hangUpDaemon(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s")
+
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}()
+	return path
+}
+
+// Losing spacenavd has to be observable. Navigation reads the latch, which
+// keeps returning its last value forever, so without this signal a dead
+// daemon looks exactly like a puck sitting still.
+func TestDeadFiresWhenTheDaemonHangsUp(t *testing.T) {
+	c, err := Dial(hangUpDaemon(t), quiet())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	select {
+	case <-c.Dead():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dead was not closed after the daemon hung up")
+	}
+	if c.Err() == nil {
+		t.Error("Err is nil after the daemon hung up; the caller cannot tell this from a clean Close")
+	}
+}
+
+func TestDeadReportsNoErrorAfterClose(t *testing.T) {
+	c, err := Dial(fakeDaemon(t, nil), quiet())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	select {
+	case <-c.Dead():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dead was not closed after Close")
+	}
+	if err := c.Err(); err != nil {
+		t.Errorf("Err reports %v after a deliberate Close, want nil", err)
+	}
+}
