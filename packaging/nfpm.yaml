@@ -1,0 +1,52 @@
+# nfpm package definition. Built by scripts/build-deb.sh, which sets VERSION
+# and stages the binary into dist/. Paths are relative to the repository root.
+name: spacemouse-bridge
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: none
+section: utils
+priority: optional
+maintainer: kchellappan <k.chellappan92@gmail.com>
+homepage: https://github.com/kchellappan/spacemouse_linux_ws
+license: MIT
+description: |
+  SpaceMouse support for browser-based CAD on Linux.
+  Bridges a 3Dconnexion SpaceMouse to web applications that use the
+  3DconnexionJS client library, such as Onshape, for which 3Dconnexion
+  ships no Linux driver. Runs as a systemd user service, reads the device
+  through spacenavd, and drives the page camera in six degrees of freedom.
+
+depends:
+  # The device is read through spacenavd rather than raw evdev, so it is a
+  # hard requirement rather than a suggestion.
+  - spacenavd
+  # certutil, used to install the per-user CA into browser trust stores.
+  # Without it the bridge starts but every browser rejects the connection.
+  - libnss3-tools
+
+contents:
+  - src: ./dist/spacemouse-bridge
+    dst: /usr/bin/spacemouse-bridge
+    file_info:
+      mode: 0755
+
+  - src: ./packaging/systemd/spacemouse-bridge.service
+    dst: /usr/lib/systemd/user/spacemouse-bridge.service
+    file_info:
+      mode: 0644
+
+  - src: ./README.md
+    dst: /usr/share/doc/spacemouse-bridge/README.md
+    file_info:
+      mode: 0644
+
+  # Debian expects the licence at this path, not as LICENSE.
+  - src: ./LICENSE
+    dst: /usr/share/doc/spacemouse-bridge/copyright
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./packaging/deb/postinstall.sh
+  preremove: ./packaging/deb/preremove.sh

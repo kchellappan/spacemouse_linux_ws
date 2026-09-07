@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Callable so the release workflow gates on exactly these checks rather than
+  # on a copy of them that can drift.
+  workflow_call:
 
 permissions:
   contents: read
@@ -28,6 +31,12 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      # The NSS trust tests exercise real certutil calls against a real
+      # database. Without this they skip, and the trust layer — the part that
+      # actually breaks on users' machines — would go untested.
+      - name: install certutil
+        run: sudo apt-get update && sudo apt-get install -y libnss3-tools
+
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
@@ -48,3 +57,51 @@ jobs:
       # deadlock there is the failure mode we most care about catching.
       - name: test
         run: go test -race ./...
+
+  package:
+    name: package
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # build-deb.sh derives the version from the current tag, which a
+          # shallow clone would not fetch.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: build the .deb
+        run: scripts/build-deb.sh
+
+      # Building a .deb only proves it can be written. Installing it proves the
+      # dependencies resolve, the maintainer scripts run, and the unit lands
+      # where systemd looks for it — which is what actually breaks.
+      - name: install it
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./dist/*.deb
+
+      - name: verify the installed package
+        run: |
+          set -x
+          /usr/bin/spacemouse-bridge -version
+          test -f /usr/lib/systemd/user/spacemouse-bridge.service
+          systemd-analyze --user verify /usr/lib/systemd/user/spacemouse-bridge.service
+          systemctl --global is-enabled spacemouse-bridge.service
+          # No SpaceMouse and no browser on a runner, so several checks warn.
+          # What matters is that it runs and reports rather than crashing.
+          /usr/bin/spacemouse-bridge -selftest || true
+
+      - name: remove it
+        run: sudo apt-get remove -y spacemouse-bridge
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error

@@ -1,0 +1,48 @@
+name: Release
+
+# Tags are v{major}.{minor}, e.g. v0.1.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # Reuses the pull-request checks, so a tag cannot ship something that would
+  # have failed CI. The .deb this builds is the one that gets released.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: deb
+          path: dist
+
+      # A shallow clone or a missing tag would silently produce a dev version,
+      # and the release would then carry a package that claims to be something
+      # else. Fail loudly instead.
+      - name: check the package version matches the tag
+        run: |
+          expected="${GITHUB_REF_NAME#v}"
+          deb="$(ls dist/*.deb)"
+          case "$deb" in
+            *_"${expected}"_*.deb) echo "$deb matches $GITHUB_REF_NAME" ;;
+            *) echo "::error::$deb does not carry version $expected"; exit 1 ;;
+          esac
+
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

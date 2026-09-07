@@ -88,7 +88,8 @@ That is the whole user-facing procedure.
 
 ## selftest
 
-`spacemouse-bridge selftest` should check and report:
+`spacemouse-bridge -selftest` (a flag, to match the rest of the CLI) should
+check and report:
 
 - spacenavd running, `/var/run/spnav.sock` connectable
 - a device present
@@ -109,7 +110,7 @@ between a bug report and a self-service fix.
    bug rather than an Onshape change
 4. **Navigation model** — the hard part; port from `spacenav-ws` (doc 06)
 5. **Onshape**
-6. **Packaging**
+6. **~~Packaging~~** — done; see "What was built" below
 
 ## Design decisions to build in from the start
 
@@ -122,6 +123,107 @@ between a bug report and a self-service fix.
   (doc 01).
 - **Own frame timer**, latching the last deflection, rather than one frame per
   device event (doc 05).
+
+## What was built
+
+Implemented 2026-09-07. The plan above survived contact largely intact; this
+section records what actually exists, so the two do not have to be reconciled
+by reading code.
+
+```
+packaging/
+  systemd/spacemouse-bridge.service   user unit, WantedBy=default.target
+  deb/postinstall.sh                  systemctl --global enable, nothing else
+  deb/preremove.sh                    systemctl --global disable
+  nfpm.yaml                           package metadata and file map
+scripts/build-deb.sh                  version derivation, build, nfpm invocation
+internal/certs/                       CA and leaf generation, NSS trust injection
+```
+
+`scripts/build-deb.sh` derives the version from the current git tag, falling
+back to `0.0.0~dev.<sha>` off a tag. The `~` matters: in dpkg's ordering it
+sorts *before* any release, so a development build never looks newer than the
+release it came after. nfpm runs through `go run <pinned>`, which verifies the
+download against the Go checksum database and keeps the packaging tool out of
+the machine's global state.
+
+### Certificate handling, as implemented
+
+The service does at start, in the user's own session:
+
+1. `certs.Ensure` — generate the CA and leaf if absent, reissue the leaf within
+   30 days of expiry. Keys are written 0600 into a 0700 directory.
+2. `ensureTrust` — find every NSS store by glob, install the CA where it is
+   absent, warn about browsers that are already running.
+3. Bind, connect to spacenavd, serve.
+
+All three are idempotent, so this is a no-op on every start after the first.
+
+One correction to the original design: whether a store is trusted is decided by
+comparing the *certificate*, not the nickname. Deleting the credential
+directory produces a new CA under the same nickname, and a nickname check would
+report the stale entry as trusted, skip the install, and leave the browser
+rejecting the bridge with nothing to explain why.
+`TestTrustedComparesTheCertificateNotTheNickname` pins this.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request: gofmt, vet, build, the
+test suite under `-race`, then a `package` job that builds the `.deb`,
+**installs it with apt**, verifies the unit file and `--global` enablement,
+runs `-selftest`, and removes it again. Building a package only proves it can
+be written; installing it proves the dependencies resolve and the maintainer
+scripts run, which is what actually breaks.
+
+`libnss3-tools` is installed in CI so the NSS trust tests run for real rather
+than skipping — the trust layer is the part that fails on users' machines.
+
+### Releases
+
+`.github/workflows/release.yml` fires on tags matching `v*` (the scheme is
+`v{major}.{minor}`). It calls the CI workflow as a reusable workflow, so a tag
+cannot ship something that would have failed a pull request, then publishes a
+GitHub Release carrying the same `.deb` artifact CI built and installed. It
+refuses to publish if the package version does not match the tag, which is what
+a shallow clone or a missing tag would otherwise produce silently.
+
+### Known gaps
+
+- The service exits if the SpaceMouse is absent for more than 30 seconds at
+  start, and systemd restarts it every 10 seconds thereafter
+  (`StartLimitIntervalSec=0` keeps it retrying instead of giving up). A device
+  unplugged *while running* ends the process the same way. In-process
+  reconnection would be better than a restart loop.
+- amd64 only. `ARCH=arm64 scripts/build-deb.sh` works; nothing publishes it.
+- `preremove` cannot stop instances already running in user sessions.
+
+## Licensing
+
+The project is MIT. The question that actually needed answering was whether
+anything from the 3DxWare SDK ended up in it.
+
+**Audit, 2026-09-07.** Every line of 45 characters or more from `cmd/`,
+`internal/`, `web/`, `scripts/`, `packaging/`, `docs/` and the README was
+checked against all 448 files in `3DxWare_SDK_v4-0-6_r22071`. No line appears
+verbatim in the SDK. Rerun it before any release that adds substantial code.
+
+What *is* derived from the SDK is interface information: navlib property names
+(doc 01), the hardcoded loopback address and port (doc 02), the V3DK button
+codes, and the NL-Proxy version string the discovery endpoint reports. These
+are identifiers that must match for a page to talk to a driver at all. Each is
+documented with its source cited.
+
+The SDK itself is not redistributed — it is gitignored, and only the test
+harness needs it, from a copy the developer downloads. That sidesteps the
+clause restricting redistribution of the JS components to web applications
+operating exclusively with 3Dconnexion products.
+
+Two clauses in the SDK EULA are worth a read by anyone building on this. The
+grant is limited to integrating with 3Dconnexion hardware, which is what this
+does. And it forbids using SDK elements to create or enhance a product that
+*competes* with a 3Dconnexion product; 3Dconnexion ships no Linux driver, so
+this fills a gap rather than displacing something they sell. That is an
+observation, not legal advice.
 
 ## Notes for a public release
 
