@@ -59,11 +59,9 @@ go build -o bin/spacemouse-bridge ./cmd/spacemouse-bridge
 go test ./...
 ```
 
-Or, without cloning:
-
-```sh
-go install github.com/kchellappan/spacemouse_linux_ws/cmd/spacemouse-bridge@latest
-```
+Building from source is for development. The supported way to install is the
+`.deb` on the [Releases](https://github.com/kchellappan/spacemouse_linux_ws/releases)
+page, which also pulls in `spacenavd` and sets up the user service.
 
 ## Running (development)
 
