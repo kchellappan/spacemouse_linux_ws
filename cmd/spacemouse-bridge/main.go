@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/config"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 )
@@ -53,6 +53,9 @@ func main() {
 
 		showVersion = flag.Bool("version", false, "print the version and exit")
 
+		configPath = flag.String("config", "", "settings file (default: $XDG_CONFIG_HOME/spacemouse-bridge/config.json)")
+		showConfig = flag.Bool("show-config", false, "print the effective settings as JSON and exit")
+
 		navMode     = flag.String("nav-mode", "object", "object: the model follows the cap; camera: the camera does")
 		fullScale   = flag.Float64("full-scale", 350, "device units at full deflection, from -calibrate")
 		deadzone    = flag.Float64("deadzone", 0.06, "fraction of full scale to ignore")
@@ -79,8 +82,43 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
+	cfgPath := *configPath
+	if cfgPath == "" {
+		p, err := config.DefaultPath()
+		if err != nil {
+			log.Error("cannot locate the settings file", "err", err)
+			os.Exit(1)
+		}
+		cfgPath = p
+	}
+	settings, err := config.Load(cfgPath)
+	if err != nil {
+		// A corrupt file should not silently reset a user's tuning.
+		log.Error("cannot read settings", "err", err)
+		os.Exit(1)
+	}
+	// Flags beat the file, but only where the user actually passed one:
+	// flag.Visit reports set flags, not defaulted ones.
+	setFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	applyFlagOverrides(&settings, setFlags, flagValues{
+		navMode: *navMode, fullScale: *fullScale, deadzone: *deadzone,
+		curve: *exponent, panSpeed: *transSpeed, rotateSpeed: *rotSpeed,
+		zoomSpeed: *zoomSpeed, dominantAxis: *dominant,
+		noRotate: *noRotate, noTranslate: *noTranslate,
+		frameRate: *frameRate, buttons: *buttons,
+	})
+
+	if *showConfig {
+		if err := printConfig(settings, cfgPath); err != nil {
+			log.Error("cannot print settings", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if *calibrate {
-		if err := runCalibrate(*sockPath, log); err != nil {
+		if err := runCalibrate(*sockPath, cfgPath, settings, log); err != nil {
 			log.Error("calibration failed", "err", err)
 			os.Exit(1)
 		}
@@ -103,7 +141,7 @@ func main() {
 
 	switch {
 	case *doSelftest:
-		if err := runSelftest(paths, *sockPath); err != nil {
+		if err := runSelftest(paths, *sockPath, cfgPath, settings); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -164,33 +202,25 @@ func main() {
 		defer dev.Close()
 		device, deviceDead = dev, dev.Dead()
 
-		btns, err := server.ParseButtons(*buttons)
+		btns, err := server.ParseButtons(settings.ButtonSpec())
 		if err != nil {
-			log.Error("bad -buttons", "err", err)
+			log.Error("bad button mapping", "err", err)
+			os.Exit(2)
+		}
+		if settings.NavMode != "object" && settings.NavMode != "camera" {
+			log.Error("unknown nav mode", "mode", settings.NavMode, "want", "object or camera")
 			os.Exit(2)
 		}
 
-		cfg := nav.DefaultConfig()
-		cfg.FullScale = *fullScale
-		cfg.Deadzone = *deadzone
-		cfg.Exponent = *exponent
-		cfg.TranslationSpeed = *transSpeed
-		cfg.RotationSpeed = *rotSpeed
-		cfg.ZoomSpeed = *zoomSpeed
-		cfg.DominantAxis = *dominant
-		cfg.EnableRotation = !*noRotate
-		cfg.EnableTranslation = !*noTranslate
-		if *navMode == "camera" {
-			cfg.Mode = nav.ModeCamera
-		} else if *navMode != "object" {
-			log.Error("unknown -nav-mode", "mode", *navMode, "want", "object or camera")
-			os.Exit(2)
+		if settings.FullScale == config.Default().FullScale {
+			log.Warn("using the built-in full scale; run -calibrate to measure this device",
+				"fullScale", settings.FullScale)
 		}
 
 		opts.OnReady = server.Drive(log, server.DriveOptions{
 			Device:    dev,
-			Config:    cfg,
-			FrameRate: *frameRate,
+			Config:    settings.Nav(),
+			FrameRate: settings.FrameRate,
 			Buttons:   btns,
 		})
 	case "probe":
@@ -364,7 +394,7 @@ const calibrateDominance = 3
 // runCalibrate walks the six gestures and prints the resulting axis map.
 // Device models and spnavrc settings both change this, so it is measured
 // rather than assumed. See docs/05-spacenavd.md.
-func runCalibrate(socket string, log *slog.Logger) error {
+func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logger) error {
 	c, err := spacenav.Dial(socket, log)
 	if err != nil {
 		return err
@@ -469,6 +499,31 @@ func runCalibrate(socket string, log *slog.Logger) error {
 
 	printAxisMap(results)
 	fmt.Printf("    Full deflection %d, resting noise floor %d.\n\n", fullScale, floor)
+
+	// Persist it. Measuring a device and then printing the number at someone
+	// was the old behaviour, and it meant every install ran against the
+	// built-in full scale forever.
+	settings.FullScale = float64(fullScale)
+	settings.NoiseFloor = float64(floor)
+
+	// A dead zone below the resting offset lets the view drift while nobody
+	// is touching the puck, so a measurement that demands a wider one wins.
+	if fullScale > 0 {
+		needed := float64(floor) * 1.5 / float64(fullScale)
+		if needed > settings.Deadzone {
+			fmt.Printf("    Raising the dead zone from %.3f to %.3f: the resting offset\n",
+				settings.Deadzone, needed)
+			fmt.Printf("    would otherwise drift the view when idle.\n\n")
+			settings.Deadzone = needed
+		}
+	}
+
+	if err := saveSettings(cfgPath, settings); err != nil {
+		return fmt.Errorf("saving calibration: %w", err)
+	}
+	fmt.Println("    Restart the service to pick this up:")
+	fmt.Println("      systemctl --user restart spacemouse-bridge")
+	fmt.Println()
 	return nil
 }
 

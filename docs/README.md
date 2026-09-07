@@ -19,6 +19,7 @@ inline. Where something is inferred rather than observed, it says so.
 | [07-onshape-integration.md](07-onshape-integration.md) | Platform sniff (resolved), verification procedure |
 | [08-distribution-plan.md](08-distribution-plan.md) | Language, packaging, install flow |
 | [09-implementation.md](09-implementation.md) | Code layout, design decisions, how to run and test |
+| [10-configuration.md](10-configuration.md) | The settings file, precedence, and the API rules for the future UI |
 
 `tools/nlproxy-probe.py` — the throwaway server used to verify browser behaviour.
 See doc 07.
@@ -38,3 +39,6 @@ See doc 07.
   Validated on Chrome (deb), Firefox (snap), and Zen (flatpak). — doc 04
 - Build on **spacenavd** rather than raw evdev. — doc 05
 - Prior art exists (`spacenav-ws`) and upstream is asking for a maintainer. — doc 06
+- **Tuning persists in a config file** that `-calibrate` writes. Before it, a
+  measured full scale was printed and discarded, so every install ran against
+  the built-in default. — doc 10

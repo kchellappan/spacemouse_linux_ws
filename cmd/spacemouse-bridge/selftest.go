@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/certs"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/config"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 )
@@ -65,9 +66,10 @@ func (r *report) addErr(name string, err error, h string) { r.fail(name, err.Err
 // broken. Warnings do not fail: a running browser or a missing device is
 // ordinary, and exiting non-zero for them would make the command useless in
 // scripts.
-func runSelftest(p certs.Paths, socket string) error {
+func runSelftest(p certs.Paths, socket, cfgPath string, settings config.Config) error {
 	var r report
 
+	checkSettings(&r, cfgPath, settings)
 	checkSpacenavd(&r, socket)
 	checkDeviceNode(&r)
 	checkPort(&r)
@@ -100,6 +102,24 @@ func runSelftest(p certs.Paths, socket string) error {
 		return fmt.Errorf("%d of %d checks failed", failed, len(r.checks))
 	}
 	return nil
+}
+
+// checkSettings surfaces the trap this whole package exists to close: a
+// device whose full scale was never measured runs against the built-in 350
+// and feels sluggish, with nothing anywhere saying so.
+func checkSettings(r *report, path string, c config.Config) {
+	if _, err := os.Stat(path); err != nil {
+		r.warn("settings", "no file at "+shortenHome(path)+"; using built-in defaults",
+			"run -calibrate to measure this device and write one")
+		return
+	}
+	if c.FullScale == config.Default().FullScale {
+		r.warn("settings", fmt.Sprintf("%s, but full scale is still the built-in %g",
+			shortenHome(path), c.FullScale),
+			"run -calibrate; an unmeasured full scale costs sensitivity")
+		return
+	}
+	r.ok("settings", fmt.Sprintf("%s, full scale %g", shortenHome(path), c.FullScale))
 }
 
 func checkSpacenavd(r *report, socket string) {
