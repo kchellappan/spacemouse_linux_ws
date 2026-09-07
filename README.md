@@ -82,6 +82,22 @@ the package, and nothing is added to the system CA bundle.
 Restart any browser that was already running: NSS reads its certificate store
 once, at startup.
 
+### Tuning
+
+Run this once, with the device plugged in:
+
+```sh
+spacemouse-bridge -calibrate
+systemctl --user restart spacemouse-bridge
+```
+
+It measures your device's full deflection and resting noise and writes them to
+`~/.config/spacemouse-bridge/config.json`, along with every other tunable —
+speeds, response curve, button mapping. Without it the bridge assumes a typical
+device, which on ours cost about a third of the usable range. `-show-config`
+prints the effective settings; see
+[docs/10-configuration.md](docs/10-configuration.md) for what each one does.
+
 ### When something is wrong
 
 ```sh

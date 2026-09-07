@@ -10,6 +10,7 @@ internal/navlib/         property model, quirks, matrix math, handshake
 internal/server/         HTTP/WS wiring, discovery endpoint, probe + orbit
 internal/spacenav/       spacenavd client, axis calibration
 internal/nav/            navigation model: deflection -> camera motion
+internal/config/         persisted settings, flag precedence (doc 10)
 internal/certs/          CA and leaf generation, NSS trust injection
 packaging/               systemd user unit, deb maintainer scripts, nfpm
 scripts/                 build and run helpers
@@ -99,7 +100,9 @@ machine" and "works after install" would have hidden.
 | `-mode orbit` | Slowly rotate the client's camera about its model centre. Proves the write path — transactions, motion flags, `view.affine` writes — with no hardware attached. |
 | `-mode none` | Connect and idle. |
 | `-read-mouse` | Dump spacenavd events and exit. Does not start the server. Use it to confirm hardware before involving a browser. |
-| `-calibrate` | Measure the resting noise floor and full deflection, then walk the six degrees of freedom and report which wire axis and sign each physical motion produces. Does not start the server. |
+| `-calibrate` | Measure the resting noise floor and full deflection, then walk the six degrees of freedom and report which wire axis and sign each physical motion produces. **Writes the result to the settings file** (doc 10). Does not start the server. |
+| `-show-config` | Print the effective settings, after flags are layered over the file, and exit. |
+| `-selftest` | Check spacenavd, the device, the port, the settings, the certificates and browser trust; report and exit non-zero on failure. |
 | `-debug` | Log every WAMP frame in both directions. |
 
 ## Verified
