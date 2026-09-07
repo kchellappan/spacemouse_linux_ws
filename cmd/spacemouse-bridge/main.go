@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -145,6 +146,11 @@ func main() {
 		Log:         log,
 		ServerIdent: "spacemouse-bridge " + version,
 	}
+	// deviceDead is nil outside drive mode, and a nil channel blocks forever
+	// in a select, which is exactly the behaviour we want there.
+	var deviceDead <-chan struct{}
+	var device *spacenav.Client
+
 	switch *mode {
 	case "drive":
 		// At login this can start before spacenavd has created its socket, so
@@ -156,6 +162,7 @@ func main() {
 			os.Exit(1)
 		}
 		defer dev.Close()
+		device, deviceDead = dev, dev.Dead()
 
 		btns, err := server.ParseButtons(*buttons)
 		if err != nil {
@@ -205,12 +212,38 @@ func main() {
 		// CONNECT, which the upgrader cannot hijack; browsers use HTTP/1.1
 		// for WebSocket anyway, and the real NL-Proxy is HTTP/1.1 only.
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		// Browsers open and abandon TLS connections routinely, and the
+		// stdlib logs each one as "TLS handshake error ... EOF" at the top
+		// level. In a journal that reads like a fault. Route the server's own
+		// chatter through slog at debug, where -debug can still surface it.
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelDebug),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Losing spacenavd is not recoverable in place: the read loop is gone, and
+	// the drive loop returns the moment its event channel closes. Left alone
+	// the process would keep serving, browsers would keep connecting, and the
+	// puck would do nothing — a live service with dead navigation, which is
+	// the worst of the available failures. Exit instead, and let the unit's
+	// Restart=always reconnect.
+	// atomic: written by the watcher goroutine, read by main after the server
+	// returns. The happens-before edge through Shutdown is real but subtle,
+	// and not worth relying on.
+	var deviceLost atomic.Bool
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-deviceDead:
+			if err := device.Err(); err != nil {
+				deviceLost.Store(true)
+				log.Error("lost the connection to spacenavd; exiting so the service restarts", "err", err)
+			} else {
+				// Close was called; the ordinary shutdown path is running.
+				return
+			}
+		}
 		sc, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sc)
@@ -220,6 +253,9 @@ func main() {
 	err = srv.ListenAndServeTLS(certFile, keyFile)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server failed", "err", err)
+		os.Exit(1)
+	}
+	if deviceLost.Load() {
 		os.Exit(1)
 	}
 	log.Info("stopped")

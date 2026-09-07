@@ -10,11 +10,24 @@ client announces, not on assumption.
 |---|---|---|---|
 | Local SDK (`3DxWare_SDK_v4-0-6_r22071`) | **0.8.1** (dated 2025-01-09) | `WebThreeJS Sample` | `{version: 0.8, name, rowMajorOrder: bool}` |
 | 3dconnexion.com online sample | **0.3.11** (2020 capture) | `web_threejs.html` | `{version: 0, name}` — no `rowMajorOrder` |
-| Onshape | unknown | `Onshape` | uses the modern layout (see below) |
+| Onshape (measured 2026-09-07) | **0.6.0** | `Onshape` | `{version: 0.6, name: "Onshape"}` — column-major, frame timing |
 
-Onshape's version could not be read directly — 3dconnexion.com and Onshape's
-bundle both return HTTP 403 to non-browser clients (Cloudflare). Its `name`
-string is known because `spacenav-ws` whitelists it explicitly.
+Onshape's version could not be read by fetching its bundle — 3dconnexion.com
+and Onshape both return HTTP 403 to non-browser clients (Cloudflare). It was
+read instead off the wire, from the `create 3dcontroller` handshake of a live
+session against `https://cad.onshape.com`:
+
+```
+msg="3dmouse created" connexion=mouse-d5imn6af95 clientLibVersion=0.6.0
+msg="3dcontroller created" instance=ctl-gilplq042k client=Onshape \
+    clientVersion=0.6 matrixLayout=column-major(12,13,14) frameTiming=true
+```
+
+0.6 sits after the v0.5 break, so the quirks table derives column-major from
+the version alone, with no `rowMajorOrder` field present — which is the outcome
+this document exists to protect. Onshape also drives its own frame clock, so
+the bridge suppresses its internal ticker while the client is animating (doc
+09).
 
 ## The matrix layout problem
 
@@ -31,6 +44,7 @@ Concretely, where the translation lives in the flat 16-element array differs:
 | 2020 capture (v0.3.11), driver's `view.affine` writes | **3, 7, 11** |
 | 0.8.1 three.js sample (`camera.matrixWorld.toArray()`) | **12, 13, 14** |
 | `spacenav-ws` (works against Onshape) | 12, 13, 14 |
+| Onshape 0.6.0, measured live 2026-09-07 | 12, 13, 14 |
 
 **Do not hardcode.** Read the `info` object captured at `create 3dcontroller`
 and drive a per-client quirks table off `name` / `version` / `rowMajorOrder`.
