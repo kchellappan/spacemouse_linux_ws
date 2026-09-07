@@ -1,0 +1,448 @@
+// Command spacemouse-bridge exposes a 3Dconnexion SpaceMouse to browser-based
+// CAD applications over the loopback WebSocket interface that 3Dconnexion's
+// 3DconnexionJS client library expects.
+//
+// See docs/ for protocol, certificate and distribution notes.
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"spacemouse-bridge/internal/nav"
+	"spacemouse-bridge/internal/server"
+	"spacemouse-bridge/internal/spacenav"
+)
+
+var version = "dev"
+
+func main() {
+	var (
+		host       = flag.String("host", server.DefaultHost, "address to bind")
+		port       = flag.Int("port", server.DefaultPort, "port to bind")
+		cert       = flag.String("cert", "", "TLS certificate chain (leaf + CA) in PEM form")
+		key        = flag.String("key", "", "TLS private key in PEM form")
+		debug      = flag.Bool("debug", false, "log every WAMP frame")
+		mode       = flag.String("mode", "probe", "what to do on connect: probe, orbit, or none")
+		orbitSpeed = flag.Float64("orbit-speed", 30, "degrees per second for -mode=orbit")
+		readMouse  = flag.Bool("read-mouse", false, "dump spacenavd events and exit; does not start the server")
+		calibrate  = flag.Bool("calibrate", false, "identify which physical motion drives which axis, then exit")
+		sockPath   = flag.String("spnav-socket", "", "spacenavd socket path (default: well-known locations)")
+
+		navMode     = flag.String("nav-mode", "object", "object: the model follows the cap; camera: the camera does")
+		fullScale   = flag.Float64("full-scale", 350, "device units at full deflection, from -calibrate")
+		deadzone    = flag.Float64("deadzone", 0.06, "fraction of full scale to ignore")
+		exponent    = flag.Float64("curve", 1.6, "response curve; 1 is linear, higher gives finer control near centre")
+		transSpeed  = flag.Float64("pan-speed", 0.9, "model diagonals per second at full deflection")
+		rotSpeed    = flag.Float64("rotate-speed", 1.6, "radians per second at full deflection")
+		zoomSpeed   = flag.Float64("zoom-speed", 1.2, "orthographic zoom, e-foldings per second at full deflection")
+		dominant    = flag.Bool("dominant-axis", false, "use only the strongest axis; suppresses cross-talk")
+		noRotate    = flag.Bool("no-rotate", false, "disable rotation, leaving pan and zoom only")
+		noTranslate = flag.Bool("no-translate", false, "disable translation, leaving rotation only")
+		frameRate   = flag.Int("frame-rate", 60, "camera updates per second when we drive the clock")
+		buttons     = flag.String("buttons", "0=fit,1=menu", "button mapping, e.g. 0=fit,1=menu; actions: none, fit, menu, dominant-axis, rotation-lock")
+	)
+	flag.Parse()
+
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	if *calibrate {
+		if err := runCalibrate(*sockPath, log); err != nil {
+			log.Error("calibration failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *readMouse {
+		if err := dumpMouse(*sockPath, log); err != nil {
+			log.Error("read-mouse failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *cert == "" || *key == "" {
+		log.Error("-cert and -key are required; run scripts/dev-certs.sh first")
+		os.Exit(2)
+	}
+
+	opts := server.Options{
+		Log:         log,
+		ServerIdent: "spacemouse-bridge " + version,
+	}
+	switch *mode {
+	case "drive":
+		dev, err := spacenav.Dial(*sockPath, log)
+		if err != nil {
+			log.Error("cannot reach the SpaceMouse", "err", err)
+			os.Exit(1)
+		}
+		defer dev.Close()
+
+		btns, err := server.ParseButtons(*buttons)
+		if err != nil {
+			log.Error("bad -buttons", "err", err)
+			os.Exit(2)
+		}
+
+		cfg := nav.DefaultConfig()
+		cfg.FullScale = *fullScale
+		cfg.Deadzone = *deadzone
+		cfg.Exponent = *exponent
+		cfg.TranslationSpeed = *transSpeed
+		cfg.RotationSpeed = *rotSpeed
+		cfg.ZoomSpeed = *zoomSpeed
+		cfg.DominantAxis = *dominant
+		cfg.EnableRotation = !*noRotate
+		cfg.EnableTranslation = !*noTranslate
+		if *navMode == "camera" {
+			cfg.Mode = nav.ModeCamera
+		} else if *navMode != "object" {
+			log.Error("unknown -nav-mode", "mode", *navMode, "want", "object or camera")
+			os.Exit(2)
+		}
+
+		opts.OnReady = server.Drive(log, server.DriveOptions{
+			Device:    dev,
+			Config:    cfg,
+			FrameRate: *frameRate,
+			Buttons:   btns,
+		})
+	case "probe":
+		opts.OnReady = server.Probe(log)
+	case "orbit":
+		opts.OnReady = server.Orbit(log, *orbitSpeed)
+	case "none":
+	default:
+		log.Error("unknown -mode", "mode", *mode, "want", "drive, probe, orbit or none")
+		os.Exit(2)
+	}
+
+	addr := net.JoinHostPort(*host, fmt.Sprint(*port))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           server.New(opts),
+		ReadHeaderTimeout: 10 * time.Second,
+		// Force HTTP/1.1. WebSocket over HTTP/2 needs RFC 8441 Extended
+		// CONNECT, which the upgrader cannot hijack; browsers use HTTP/1.1
+		// for WebSocket anyway, and the real NL-Proxy is HTTP/1.1 only.
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		sc, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sc)
+	}()
+
+	log.Info("listening", "url", "https://"+addr, "version", version)
+	err := srv.ListenAndServeTLS(*cert, *key)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("server failed", "err", err)
+		os.Exit(1)
+	}
+	log.Info("stopped")
+}
+
+// dumpMouse prints device events, so a user can confirm spacenavd and the
+// hardware work before involving a browser.
+func dumpMouse(socket string, log *slog.Logger) error {
+	c, err := spacenav.Dial(socket, log)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	log.Info("reading spacenavd events; move the puck (ctrl-c to stop)")
+	for ev := range c.Events() {
+		switch {
+		case ev.Motion != nil:
+			m := ev.Motion
+			log.Info("motion",
+				"x", m.X, "y", m.Y, "z", m.Z,
+				"rx", m.RX, "ry", m.RY, "rz", m.RZ,
+				"periodMs", m.Period, "centred", m.Zero())
+		case ev.Button != nil:
+			log.Info("button", "id", ev.Button.ID, "pressed", ev.Button.Pressed)
+		}
+	}
+	return nil
+}
+
+// gesture is one prompt in the calibration walkthrough.
+type gesture struct {
+	name    string
+	prompt  string
+	diagram string
+}
+
+// The six degrees of freedom, described physically. Wording matters: the whole
+// point is to remove ambiguity about what the user actually did.
+// The cap travels only a millimetre or two in every direction, so the prompts
+// say what to do with the cap rather than with the device, and each carries a
+// diagram: describing a 6-DoF motion in words alone is genuinely ambiguous.
+var gestures = []gesture{
+	{"translate right", "SLIDE the cap RIGHT", `
+        side view                    cap stays level,
+                                     slides sideways
+        ╭─────────────╮
+        │     cap     │  ═══►
+        ╰─────────────╯
+       ╭───────────────╮
+       │     base      │
+       ╰───────────────╯`},
+
+	{"translate up", "PULL the cap UP", `
+        side view                    grip the sides and lift.
+              ▲                      travel is 1-2 mm, so it
+              ║                      will feel like nothing
+        ╭─────────────╮              is happening — watch the
+        │     cap     │              peak readout, not the feel
+        ╰─────────────╯
+       ╭───────────────╮
+       │     base      │
+       ╰───────────────╯`},
+
+	{"translate away", "PUSH the cap AWAY from you", `
+        top view                     cap stays level,
+                                     slides toward
+          ▲  away / screen           the screen
+          ║
+        ╭─────────────╮
+        │      ●      │
+        ╰─────────────╯
+             toward you`},
+
+	{"pitch forward", "TIP the cap FORWARD, far edge down", `
+        side view, screen on the left
+
+        ╭─────────────╮          ╭────────╮
+        │     cap     │  ═══►   ╱         ╰╮
+        ╰─────────────╯        ╰───────────╯
+            level              far edge DOWN,
+                               near edge UP`},
+
+	{"yaw right", "TWIST the cap CLOCKWISE", `
+        top view
+
+        ╭─────────────╮
+        │      ↻      │          rotate about the
+        ╰─────────────╯          vertical axis`},
+
+	{"roll right", "TIP the cap RIGHT, right edge down", `
+        front view, facing you
+
+        ╭─────────────╮          ╭────────╮
+        │     cap     │  ═══►   ╱         ╰╮
+        ╰─────────────╯        ╰───────────╯
+            level              right edge DOWN,
+                               left edge UP`},
+}
+
+// calibrateDominance is stricter than Deflection.Clean: for calibration we
+// want an unambiguous reading, and cross-talk on a SpaceMouse is easy to
+// produce accidentally.
+const calibrateDominance = 3
+
+// runCalibrate walks the six gestures and prints the resulting axis map.
+// Device models and spnavrc settings both change this, so it is measured
+// rather than assumed. See docs/05-spacenavd.md.
+func runCalibrate(socket string, log *slog.Logger) error {
+	c, err := spacenav.Dial(socket, log)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	opts := spacenav.DefaultDetectOptions
+
+	fmt.Println()
+	fmt.Println("SpaceMouse axis calibration")
+	fmt.Println()
+
+	// A real puck rests with a small residual offset rather than at exact
+	// zero. Measure it, so "has the user let go" has a sane threshold and so
+	// we know the floor the navigation model must ignore.
+	fmt.Print("  [noise] TAKE YOUR HAND OFF the puck ... ")
+	time.Sleep(1500 * time.Millisecond)
+	floor, err := spacenav.MeasureNoiseFloor(ctx, c, 2*time.Second)
+	if err != nil {
+		fmt.Println()
+		return err
+	}
+	// The floor at true rest understates how far the cap sits just after a
+	// push: the spring settles slowly. Keep generous headroom.
+	opts.RestThreshold = restThreshold(floor, 0)
+	fmt.Printf("resting noise floor = %d\n", floor)
+
+	// Learn full scale, so the detection threshold is not a guess.
+	fmt.Print("  [scale] Push the puck as FAR AS IT GOES, any direction, then release ... ")
+	if err := spacenav.WaitCentred(ctx, c, opts.CentreTimeout, opts.RestThreshold); err != nil {
+		fmt.Println()
+		return err
+	}
+	full, err := spacenav.DetectDeflection(ctx, c, opts, livePeak())
+	if err != nil {
+		fmt.Println()
+		return err
+	}
+	fullScale := full.Peak
+	opts.Threshold = fullScale * 35 / 100
+	if opts.Threshold < 20 {
+		opts.Threshold = 20
+	}
+	opts.RestThreshold = restThreshold(floor, fullScale)
+	fmt.Printf("\r  [scale] full deflection = %d; push threshold %d, released below %d%s\n",
+		fullScale, opts.Threshold, opts.RestThreshold, strings.Repeat(" ", 20))
+
+	if floor*10 > fullScale {
+		fmt.Printf("\n  NOTE: the resting offset is %s of full scale. Consider raising\n",
+			pct(floor, fullScale))
+		fmt.Println("        dead-zone in /etc/spnavrc, or the view will drift when idle.")
+	}
+
+	fmt.Println()
+	fmt.Println("  Now one motion at a time. Push firmly, hold, then let go and let")
+	fmt.Println("  the cap re-centre before the next prompt.")
+
+	results := make([]spacenav.Deflection, len(gestures))
+	for i, g := range gestures {
+		fmt.Printf("\n  [%d/%d] %s\n%s\n\n", i+1, len(gestures), g.prompt, g.diagram)
+
+		for attempt := 1; ; attempt++ {
+			if attempt > 1 {
+				fmt.Printf("        attempt %d — ", attempt)
+			}
+			// Say what we are waiting for: a cap that has not settled would
+			// otherwise look like a hang.
+			fmt.Print("        waiting for the cap to centre ...")
+
+			if err := spacenav.WaitCentred(ctx, c, opts.CentreTimeout, opts.RestThreshold); err != nil {
+				fmt.Println()
+				return err
+			}
+			fmt.Printf("\r        now do the motion ...%s", strings.Repeat(" ", 12))
+			d, err := spacenav.DetectDeflection(ctx, c, opts, livePeak())
+			if errors.Is(err, spacenav.ErrNoDeflection) {
+				fmt.Printf("\r        skipped: nothing detected in %s%s\n",
+					opts.DetectTimeout, strings.Repeat(" ", 20))
+				results[i] = spacenav.Deflection{}
+				break
+			}
+			if err != nil {
+				fmt.Println()
+				return err
+			}
+			fmt.Printf("\r        %s%s\n", d, strings.Repeat(" ", 24))
+
+			if d.RunnerUp*calibrateDominance < d.Peak || attempt >= 3 {
+				results[i] = d
+				if d.RunnerUp*calibrateDominance >= d.Peak {
+					fmt.Printf("        accepted after %d attempts, but axes stayed mixed\n", attempt)
+				}
+				break
+			}
+			fmt.Printf("        %s cross-talk from %s — try again, more purely\n",
+				pct(d.RunnerUp, d.Peak), d.RunnerUpAxis)
+		}
+	}
+
+	printAxisMap(results)
+	fmt.Printf("    Full deflection %d, resting noise floor %d.\n\n", fullScale, floor)
+	return nil
+}
+
+// livePeak returns a callback that shows the running peak, so the user can see
+// whether they are pushing hard enough.
+func livePeak() func(int32) {
+	return func(peak int32) { fmt.Printf("\r        peak %-6d", peak) }
+}
+
+func pct(a, b int32) string {
+	if b == 0 {
+		return "0%"
+	}
+	return fmt.Sprintf("%d%%", a*100/b)
+}
+
+func printAxisMap(results []spacenav.Deflection) {
+	fmt.Println()
+	fmt.Println("  Axis map for this device:")
+	fmt.Println()
+	fmt.Printf("    %-18s %-6s %-6s %s\n", "GESTURE", "AXIS", "SIGN", "CONFIDENCE")
+	for i, g := range gestures {
+		if results[i].Peak == 0 {
+			fmt.Printf("    %-18s %-6s %-6s %s\n", g.name, "-", "-", "not detected")
+			continue
+		}
+		sign := "+"
+		if results[i].Sign < 0 {
+			sign = "-"
+		}
+		conf := "clean"
+		if results[i].RunnerUp*calibrateDominance >= results[i].Peak {
+			conf = fmt.Sprintf("mixed (%s from %s)",
+				pct(results[i].RunnerUp, results[i].Peak), results[i].RunnerUpAxis)
+		}
+		fmt.Printf("    %-18s %-6s %-6s %s\n", g.name, results[i].Axis, sign, conf)
+	}
+	fmt.Println()
+
+	seen := map[spacenav.Axis]string{}
+	conflict := false
+	for i, d := range results {
+		if d.Peak == 0 {
+			continue
+		}
+		if prev, dup := seen[d.Axis]; dup {
+			fmt.Printf("    WARNING: %q and %q both mapped to %s\n", prev, gestures[i].name, d.Axis)
+			conflict = true
+		}
+		seen[d.Axis] = gestures[i].name
+	}
+	if conflict {
+		fmt.Println("    Re-run and make each motion more distinct.")
+	} else {
+		fmt.Println("    All six axes distinct.")
+	}
+	fmt.Println()
+}
+
+// restThreshold picks the magnitude below which the cap counts as released.
+//
+// The noise floor sampled at true rest understates where the cap sits moments
+// after a push, because the spring settles slowly — a floor of 0 was measured
+// on a device that then settled at 6. Take the most generous of a multiple of
+// the floor, a small fraction of full scale, and an absolute minimum.
+func restThreshold(floor, fullScale int32) int32 {
+	t := floor*2 + 5
+	if s := fullScale * 6 / 100; s > t {
+		t = s
+	}
+	if t < 15 {
+		t = 15
+	}
+	return t
+}

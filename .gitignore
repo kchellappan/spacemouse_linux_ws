@@ -1,0 +1,13 @@
+# Per-machine TLS material. The CA private key must never be committed or
+# shipped — see docs/04-certificates-and-browser-trust.md.
+certs/
+
+# Build output
+bin/
+
+# Vendor SDK: 3DxWare_SDK_v4-0-6_r22071. Not redistributed here — download it
+# from 3dconnexion.com and unpack it at the repo root. Only the test harness
+# needs it (web/testpage loads 3DconnexionJS from it); the bridge itself does
+# not depend on it at build or run time.
+3DxWare_SDK_v4-0-6_r22071/
+3DxWare_SDK_v4-0-6_r22071.zip
