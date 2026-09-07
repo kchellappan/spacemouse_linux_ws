@@ -46,9 +46,10 @@ documents itself by example.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "navMode": "object",
   "fullScale": 216,
+  "rotationFullScale": 146,
   "noiseFloor": 6,
   "deadzone": 0.06,
   "curve": 1.6,
@@ -67,7 +68,8 @@ documents itself by example.
 |---|---|
 | `version` | Schema version, so a later change can migrate rather than guess. |
 | `navMode` | `object` (the model follows the cap) or `camera`. |
-| `fullScale` | Device magnitude at full deflection. Measured by `-calibrate`. |
+| `fullScale` | Device magnitude when the cap is **slid** to its limit. Measured by `-calibrate`. |
+| `rotationFullScale` | The same when the cap is **tipped or twisted**. Separate because the two do not share a range — see below. |
 | `noiseFloor` | Resting offset, recorded for diagnosis. Nothing reads it yet. |
 | `deadzone` | Fraction of full scale to ignore. Must exceed the noise floor or the view drifts when idle (doc 05). |
 | `curve` | Response exponent. 1 is linear; higher gives finer control near centre. |
@@ -89,19 +91,69 @@ would lose a user's calibration without telling them.
 Writes go to a temporary file and are renamed into place, so an interrupted
 save cannot leave a half-written file that the next start refuses to parse.
 
+## Schema versions
+
+| Version | Change |
+|---|---|
+| 1 | Initial. One `fullScale` for the whole device. |
+| 2 | Split `rotationFullScale` out of `fullScale`. |
+
+A version 1 file is migrated on load by copying `fullScale` into
+`rotationFullScale`, which is what it effectively meant. The migration happens
+in memory; the file is only rewritten when something saves it.
+
+## Why full scale is two numbers
+
+The first version measured one full scale from a single opening push — "push
+as far as it goes, **any direction**". On one SpaceMouse Compact that returned
+**216** on one run and **146** on the next.
+
+`FullScale` is a divisor:
+
+```go
+n := float64(v) / fullScale   // then clamped to ±1
+```
+
+so a 48% swing in the measurement is a 48% swing in how sensitive the device
+feels. At 146 the puck reaches full speed at 42% of the deflection 350
+assumed. "Calibrated" cannot mean "whatever I got that time".
+
+The cause was that sliding the cap and tipping it do not produce the same
+magnitudes, so the answer depended on which the user happened to do. Two fixes,
+both of which use data that was already being collected and discarded:
+
+- Full scale now comes from the **six deliberate gestures**, pooled into
+  sliding and tipping, rather than from the improvised opening push. That push
+  survives only to give gesture detection a provisional threshold.
+- Each half is normalised against its own scale. `RotationFullScale` of zero
+  falls back to `FullScale`, so an old file behaves exactly as it did.
+
+`-calibrate` also now shows the peak per gesture, and reports the ratio when
+the two halves differ by 1.4x or more. The absence of those numbers on screen
+is why this went unnoticed through two calibration runs.
+
 ## Calibration writes to it
 
 `-calibrate` now saves what it measured — full scale, noise floor — and widens
 the dead zone if the resting offset demands it, then says so:
 
 ```
-    Full deflection 216, resting noise floor 6.
+    GESTURE            AXIS   SIGN   PEAK    CONFIDENCE
+    translate right    x      +      216     clean
+    ...
+    roll right         rz     +      146     clean
 
-    Raising the dead zone from 0.060 to 0.042: ...
+    Full deflection: 216 sliding, 146 tipping. Resting noise floor 6.
+    They differ by 1.5x, which is why one number for both was
+    unreliable. Each half is now normalised against its own.
+
     saved to /home/you/.config/spacemouse-bridge/config.json
     Restart the service to pick this up:
       systemctl --user restart spacemouse-bridge
 ```
+
+If a whole half goes undetected, `-calibrate` says so and falls back to the
+provisional push rather than saving a zero, which would leave that half numb.
 
 `-selftest` warns when the file is missing, or when it exists but full scale is
 still the built-in value, because an unmeasured full scale costs sensitivity

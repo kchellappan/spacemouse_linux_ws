@@ -172,3 +172,56 @@ func TestButtonSpecIsEmptyWhenNothingIsMapped(t *testing.T) {
 		t.Errorf("ButtonSpec() = %q, want empty", got)
 	}
 }
+
+// A version 1 file had one fullScale covering both halves. Reading it as
+// though rotation had no scale at all would leave rotation normalised against
+// the built-in default while translation used the measured value.
+func TestVersion1FileMigratesFullScaleToRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"version": 1, "fullScale": 146}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FullScale != 146 {
+		t.Errorf("fullScale = %v, want 146", c.FullScale)
+	}
+	if c.RotationFullScale != 146 {
+		t.Errorf("rotationFullScale = %v, want the migrated 146", c.RotationFullScale)
+	}
+	if c.Version != Version {
+		t.Errorf("version = %d, want %d after migration", c.Version, Version)
+	}
+}
+
+// A current file must be left alone: migrating it would flatten a deliberate
+// split back into one number.
+func TestVersion2FileKeepsBothScales(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"version": 2, "fullScale": 216, "rotationFullScale": 146}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.FullScale != 216 || c.RotationFullScale != 146 {
+		t.Errorf("scales = %v/%v, want 216/146", c.FullScale, c.RotationFullScale)
+	}
+}
+
+func TestNavCarriesBothScales(t *testing.T) {
+	c := Default()
+	c.FullScale = 216
+	c.RotationFullScale = 146
+
+	n := c.Nav()
+	if n.FullScale != 216 || n.RotationFullScale != 146 {
+		t.Errorf("nav scales = %v/%v, want 216/146", n.FullScale, n.RotationFullScale)
+	}
+}

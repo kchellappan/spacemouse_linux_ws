@@ -32,8 +32,16 @@ const (
 type Config struct {
 	Mode Mode
 
-	// FullScale is the device magnitude at full deflection, from -calibrate.
+	// FullScale is the device magnitude at full deflection for the
+	// translation axes, from -calibrate.
 	FullScale float64
+
+	// RotationFullScale is the same for the rotation axes, which do not
+	// share a range with translation on real hardware: measuring one number
+	// from "push in any direction" gave 216 one run and 146 the next on the
+	// same device, depending on whether the cap was slid or tipped. Zero
+	// falls back to FullScale, so an old settings file still works.
+	RotationFullScale float64
 
 	// Deadzone is a fraction of full scale below which input is ignored.
 	// It must exceed the device's resting noise floor or the view drifts
@@ -72,6 +80,7 @@ func DefaultConfig() Config {
 	return Config{
 		Mode:              ModeObject,
 		FullScale:         350,
+		RotationFullScale: 350,
 		Deadzone:          0.06,
 		Exponent:          1.6,
 		TranslationSpeed:  0.9,
@@ -119,11 +128,11 @@ type Result struct {
 
 // shape normalises one axis: clamp, deadzone with rescaling so there is no
 // jump at the edge, then the response curve.
-func (c Config) shape(v int32) float64 {
-	if c.FullScale <= 0 {
+func (c Config) shape(v int32, fullScale float64) float64 {
+	if fullScale <= 0 {
 		return 0
 	}
-	n := float64(v) / c.FullScale
+	n := float64(v) / fullScale
 	if n > 1 {
 		n = 1
 	} else if n < -1 {
@@ -155,13 +164,17 @@ func (a axes) zero() bool {
 
 // shapeAll converts raw device units into normalised, curved values.
 func (c Config) shapeAll(m spacenav.Motion) axes {
+	rotScale := c.RotationFullScale
+	if rotScale <= 0 {
+		rotScale = c.FullScale
+	}
 	a := axes{
-		x:  c.shape(m.X),
-		y:  c.shape(m.Y),
-		z:  c.shape(m.Z),
-		rx: c.shape(m.RX),
-		ry: c.shape(m.RY),
-		rz: c.shape(m.RZ),
+		x:  c.shape(m.X, c.FullScale),
+		y:  c.shape(m.Y, c.FullScale),
+		z:  c.shape(m.Z, c.FullScale),
+		rx: c.shape(m.RX, rotScale),
+		ry: c.shape(m.RY, rotScale),
+		rz: c.shape(m.RZ, rotScale),
 	}
 	if c.DominantAxis {
 		a = keepLargest(a)

@@ -321,6 +321,9 @@ type gesture struct {
 	name    string
 	prompt  string
 	diagram string
+	// rotation marks the three gestures that tip or twist the cap. Sliding
+	// and tipping do not share a range, so their peaks are pooled separately.
+	rotation bool
 }
 
 // The six degrees of freedom, described physically. Wording matters: the whole
@@ -337,7 +340,7 @@ var gestures = []gesture{
         ╰─────────────╯
        ╭───────────────╮
        │     base      │
-       ╰───────────────╯`},
+       ╰───────────────╯`, false},
 
 	{"translate up", "PULL the cap UP", `
         side view                    grip the sides and lift.
@@ -348,7 +351,7 @@ var gestures = []gesture{
         ╰─────────────╯
        ╭───────────────╮
        │     base      │
-       ╰───────────────╯`},
+       ╰───────────────╯`, false},
 
 	{"translate away", "PUSH the cap AWAY from you", `
         top view                     cap stays level,
@@ -358,7 +361,7 @@ var gestures = []gesture{
         ╭─────────────╮
         │      ●      │
         ╰─────────────╯
-             toward you`},
+             toward you`, false},
 
 	{"pitch forward", "TIP the cap FORWARD, far edge down", `
         side view, screen on the left
@@ -367,14 +370,14 @@ var gestures = []gesture{
         │     cap     │  ═══►   ╱         ╰╮
         ╰─────────────╯        ╰───────────╯
             level              far edge DOWN,
-                               near edge UP`},
+                               near edge UP`, true},
 
 	{"yaw right", "TWIST the cap CLOCKWISE", `
         top view
 
         ╭─────────────╮
         │      ↻      │          rotate about the
-        ╰─────────────╯          vertical axis`},
+        ╰─────────────╯          vertical axis`, true},
 
 	{"roll right", "TIP the cap RIGHT, right edge down", `
         front view, facing you
@@ -383,7 +386,7 @@ var gestures = []gesture{
         │     cap     │  ═══►   ╱         ╰╮
         ╰─────────────╯        ╰───────────╯
             level              right edge DOWN,
-                               left edge UP`},
+                               left edge UP`, true},
 }
 
 // calibrateDominance is stricter than Deflection.Clean: for calibration we
@@ -425,13 +428,18 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 	opts.RestThreshold = restThreshold(floor, 0)
 	fmt.Printf("resting noise floor = %d\n", floor)
 
-	// Learn full scale, so the detection threshold is not a guess.
-	fmt.Print("  [scale] Push the puck as FAR AS IT GOES, any direction, then release ... ")
+	// A provisional scale, only so gesture detection has a sane threshold.
+	// The scale that ends up in the settings file comes from the six gestures
+	// below, where we know which half of the device is being exercised.
+	fmt.Println()
+	fmt.Println("  [scale] Push the cap as FAR AS IT GOES, any direction, and HOLD until")
+	fmt.Println("          the reading stops climbing, then release.")
+	fmt.Print("        ")
 	if err := spacenav.WaitCentred(ctx, c, opts.CentreTimeout, opts.RestThreshold); err != nil {
 		fmt.Println()
 		return err
 	}
-	full, err := spacenav.DetectDeflection(ctx, c, opts, livePeak())
+	full, err := spacenav.DetectDeflection(ctx, c, opts, pushMeter())
 	if err != nil {
 		fmt.Println()
 		return err
@@ -442,7 +450,7 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 		opts.Threshold = 20
 	}
 	opts.RestThreshold = restThreshold(floor, fullScale)
-	fmt.Printf("\r  [scale] full deflection = %d; push threshold %d, released below %d%s\n",
+	fmt.Printf("\r  [scale] provisional full deflection = %d; push threshold %d, released below %d%s\n",
 		fullScale, opts.Threshold, opts.RestThreshold, strings.Repeat(" ", 20))
 
 	if floor*10 > fullScale {
@@ -472,7 +480,7 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 				return err
 			}
 			fmt.Printf("\r        now do the motion ...%s", strings.Repeat(" ", 12))
-			d, err := spacenav.DetectDeflection(ctx, c, opts, livePeak())
+			d, err := spacenav.DetectDeflection(ctx, c, opts, pushMeter())
 			if errors.Is(err, spacenav.ErrNoDeflection) {
 				fmt.Printf("\r        skipped: nothing detected in %s%s\n",
 					opts.DetectTimeout, strings.Repeat(" ", 20))
@@ -498,13 +506,42 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 	}
 
 	printAxisMap(results)
-	fmt.Printf("    Full deflection %d, resting noise floor %d.\n\n", fullScale, floor)
+
+	// Full scale comes from the six deliberate gestures, not the opening
+	// improvised push. That push measured whichever half of the device the
+	// user happened to move: the same SpaceMouse Compact reported 216 one run
+	// and 146 the next, a 48% swing landing straight in the feel, because
+	// FullScale is a divisor. The six peaks were already being measured and
+	// thrown away.
+	transScale := groupScale(results, false)
+	rotScale := groupScale(results, true)
+
+	if transScale == 0 {
+		fmt.Printf("    No translation gesture was detected; falling back to the\n")
+		fmt.Printf("    provisional %d. Re-run and slide the cap more firmly.\n\n", fullScale)
+		transScale = fullScale
+	}
+	if rotScale == 0 {
+		fmt.Printf("    No rotation gesture was detected; falling back to the\n")
+		fmt.Printf("    provisional %d. Re-run and tip the cap more firmly.\n\n", fullScale)
+		rotScale = fullScale
+	}
+
+	fmt.Printf("    Full deflection: %d sliding, %d tipping. Resting noise floor %d.\n",
+		transScale, rotScale, floor)
+	if ratio := scaleRatio(transScale, rotScale); ratio >= 1.4 {
+		fmt.Printf("    They differ by %.1fx, which is why one number for both was\n", ratio)
+		fmt.Printf("    unreliable. Each half is now normalised against its own.\n")
+	}
+	fmt.Println()
 
 	// Persist it. Measuring a device and then printing the number at someone
 	// was the old behaviour, and it meant every install ran against the
 	// built-in full scale forever.
-	settings.FullScale = float64(fullScale)
+	settings.FullScale = float64(transScale)
+	settings.RotationFullScale = float64(rotScale)
 	settings.NoiseFloor = float64(floor)
+	fullScale = transScale
 
 	// A dead zone below the resting offset lets the view drift while nobody
 	// is touching the puck, so a measurement that demands a wider one wins.
@@ -527,10 +564,56 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 	return nil
 }
 
-// livePeak returns a callback that shows the running peak, so the user can see
-// whether they are pushing hard enough.
-func livePeak() func(int32) {
-	return func(peak int32) { fmt.Printf("\r        peak %-6d", peak) }
+// pushMeter shows the running peak and whether it is still climbing.
+//
+// A bare number cannot tell a user they have stopped short, and stopping short
+// is the failure that produced a 48% swing between two calibrations of the
+// same device. "still rising" versus "holding" says when to let go.
+func pushMeter() func(int32) {
+	var best int32
+	var lastRise time.Time
+	return func(peak int32) {
+		now := time.Now()
+		if peak > best {
+			best, lastRise = peak, now
+		}
+		state := "still rising — keep pushing"
+		if !lastRise.IsZero() && now.Sub(lastRise) > pushPlateau {
+			state = "holding — release when ready"
+		}
+		fmt.Printf("\r        peak %-6d %-30s", peak, state)
+	}
+}
+
+// pushPlateau is how long the peak must stay put before the cap counts as
+// fully deflected. Short enough not to feel slow, long enough to survive the
+// jitter of a hand at the mechanical limit.
+const pushPlateau = 500 * time.Millisecond
+
+// groupScale is the largest peak among the translation or rotation gestures.
+// Undetected gestures have a zero peak and drop out.
+func groupScale(results []spacenav.Deflection, rotation bool) int32 {
+	var max int32
+	for i, d := range results {
+		if i >= len(gestures) || gestures[i].rotation != rotation {
+			continue
+		}
+		if d.Peak > max {
+			max = d.Peak
+		}
+	}
+	return max
+}
+
+// scaleRatio reports how far apart the two halves are, larger over smaller.
+func scaleRatio(a, b int32) float64 {
+	if a <= 0 || b <= 0 {
+		return 1
+	}
+	if a < b {
+		a, b = b, a
+	}
+	return float64(a) / float64(b)
 }
 
 func pct(a, b int32) string {
@@ -544,10 +627,13 @@ func printAxisMap(results []spacenav.Deflection) {
 	fmt.Println()
 	fmt.Println("  Axis map for this device:")
 	fmt.Println()
-	fmt.Printf("    %-18s %-6s %-6s %s\n", "GESTURE", "AXIS", "SIGN", "CONFIDENCE")
+	// PEAK is here because its absence hid a real problem: sliding and
+	// tipping produce different magnitudes, and with only axis names on
+	// screen there was nothing to notice.
+	fmt.Printf("    %-18s %-6s %-6s %-7s %s\n", "GESTURE", "AXIS", "SIGN", "PEAK", "CONFIDENCE")
 	for i, g := range gestures {
 		if results[i].Peak == 0 {
-			fmt.Printf("    %-18s %-6s %-6s %s\n", g.name, "-", "-", "not detected")
+			fmt.Printf("    %-18s %-6s %-6s %-7s %s\n", g.name, "-", "-", "-", "not detected")
 			continue
 		}
 		sign := "+"
@@ -559,7 +645,8 @@ func printAxisMap(results []spacenav.Deflection) {
 			conf = fmt.Sprintf("mixed (%s from %s)",
 				pct(results[i].RunnerUp, results[i].Peak), results[i].RunnerUpAxis)
 		}
-		fmt.Printf("    %-18s %-6s %-6s %s\n", g.name, results[i].Axis, sign, conf)
+		fmt.Printf("    %-18s %-6s %-6s %-7d %s\n",
+			g.name, results[i].Axis, sign, results[i].Peak, conf)
 	}
 	fmt.Println()
 

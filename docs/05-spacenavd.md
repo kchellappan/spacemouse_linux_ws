@@ -270,3 +270,15 @@ From the spacenavd README, verbatim:
 > We're looking for someone interested to take over maintainance of that
 > interface, in order to improve it past the proof of concept stage, and
 > make it a part of the free spacenav project.
+
+## Full deflection is not one number
+
+Measured on a SpaceMouse Compact, 2026-09-07. Sliding the cap to its limit and
+tipping it to its limit do not report the same magnitude, and the difference is
+large enough to matter: a single "push in any direction" measurement returned
+**216** on one run and **146** on the next, purely on which the user happened
+to do.
+
+Anything normalising device units must therefore keep translation and rotation
+scales apart, and anything *measuring* them must know which movement it asked
+for. See doc 10.

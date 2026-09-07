@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/config"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 )
 
 // The precedence rule that matters: a flag left at its default must not
@@ -99,5 +100,73 @@ func TestButtonSpecRoundTripsThroughTheConfig(t *testing.T) {
 	c.Buttons = parseButtonSpec("0=menu,1=fit")
 	if got, want := c.ButtonSpec(), "0=menu,1=fit"; got != want {
 		t.Errorf("round trip gave %q, want %q", got, want)
+	}
+}
+
+// groupScale must pool by what the gesture is, not by where it sits in the
+// slice: the whole point is that sliding and tipping are measured apart.
+func TestGroupScalePoolsSlidingAndTippingSeparately(t *testing.T) {
+	results := make([]spacenav.Deflection, len(gestures))
+	for i := range gestures {
+		if gestures[i].rotation {
+			results[i].Peak = 140 + int32(i)
+		} else {
+			results[i].Peak = 200 + int32(i)
+		}
+	}
+
+	if got := groupScale(results, false); got != 202 {
+		t.Errorf("translation scale = %d, want the largest sliding peak 202", got)
+	}
+	if got := groupScale(results, true); got != 145 {
+		t.Errorf("rotation scale = %d, want the largest tipping peak 145", got)
+	}
+}
+
+// An undetected gesture has a zero peak and must not drag the scale down or
+// count as a measurement.
+func TestGroupScaleIgnoresUndetectedGestures(t *testing.T) {
+	results := make([]spacenav.Deflection, len(gestures))
+	var seen bool
+	for i := range gestures {
+		if !gestures[i].rotation && !seen {
+			results[i].Peak = 180
+			seen = true
+		}
+	}
+	if got := groupScale(results, false); got != 180 {
+		t.Errorf("translation scale = %d, want 180 from the one detected gesture", got)
+	}
+	if got := groupScale(results, true); got != 0 {
+		t.Errorf("rotation scale = %d, want 0 so the caller can fall back", got)
+	}
+}
+
+func TestScaleRatioIsOrderIndependent(t *testing.T) {
+	if a, b := scaleRatio(216, 146), scaleRatio(146, 216); a != b {
+		t.Errorf("scaleRatio is not symmetric: %v vs %v", a, b)
+	}
+	if got := scaleRatio(200, 100); got != 2 {
+		t.Errorf("scaleRatio(200,100) = %v, want 2", got)
+	}
+	// A missing measurement must not look like a wild mismatch.
+	if got := scaleRatio(0, 150); got != 1 {
+		t.Errorf("scaleRatio with a zero = %v, want 1", got)
+	}
+}
+
+// Exactly three gestures slide and three tip. If that ever drifts, the scales
+// are pooled from the wrong movements and nothing else would say so.
+func TestGesturesAreEvenlySplit(t *testing.T) {
+	var rot, trans int
+	for _, g := range gestures {
+		if g.rotation {
+			rot++
+		} else {
+			trans++
+		}
+	}
+	if rot != 3 || trans != 3 {
+		t.Errorf("gestures split %d sliding / %d tipping, want 3 and 3", trans, rot)
 	}
 }
