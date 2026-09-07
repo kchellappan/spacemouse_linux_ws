@@ -1,0 +1,25 @@
+[Unit]
+Description=SpaceMouse bridge for browser-based CAD
+Documentation=https://github.com/kchellappan/spacemouse_linux_ws
+
+# Keep retrying indefinitely. At login the SpaceMouse may not be plugged in,
+# and spacenavd may not have created its socket yet. Without this, systemd
+# gives up after the default five attempts and the service stays dead until
+# somebody notices.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+
+# A user unit on purpose. The credentials and the NSS trust stores this
+# manages are per-user: a root service could not reach them, and a CA private
+# key shipped in the package would be extractable by anyone who downloads a
+# release. See docs/08-distribution-plan.md.
+ExecStart=/usr/bin/spacemouse-bridge -mode drive
+
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

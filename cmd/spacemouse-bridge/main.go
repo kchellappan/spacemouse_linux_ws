@@ -27,6 +27,10 @@ import (
 
 var version = "dev"
 
+// deviceWait covers the startup race between this user service and spacenavd.
+// Longer absences are systemd's problem: the unit restarts us.
+const deviceWait = 30 * time.Second
+
 func main() {
 	var (
 		host       = flag.String("host", server.DefaultHost, "address to bind")
@@ -34,11 +38,19 @@ func main() {
 		cert       = flag.String("cert", "", "TLS certificate chain (leaf + CA) in PEM form")
 		key        = flag.String("key", "", "TLS private key in PEM form")
 		debug      = flag.Bool("debug", false, "log every WAMP frame")
-		mode       = flag.String("mode", "probe", "what to do on connect: probe, orbit, or none")
+		mode       = flag.String("mode", "drive", "what to do on connect: drive, probe, orbit, or none")
 		orbitSpeed = flag.Float64("orbit-speed", 30, "degrees per second for -mode=orbit")
 		readMouse  = flag.Bool("read-mouse", false, "dump spacenavd events and exit; does not start the server")
 		calibrate  = flag.Bool("calibrate", false, "identify which physical motion drives which axis, then exit")
 		sockPath   = flag.String("spnav-socket", "", "spacenavd socket path (default: well-known locations)")
+
+		certDir     = flag.String("cert-dir", "", "where the generated CA and leaf live (default: $XDG_DATA_HOME/spacemouse-bridge)")
+		doTrust     = flag.Bool("trust", false, "install the local CA into every browser profile found, then exit")
+		doUntrust   = flag.Bool("untrust", false, "remove the local CA from every browser profile found, then exit")
+		doSelftest  = flag.Bool("selftest", false, "check the installation and report, then exit")
+		noAutoTrust = flag.Bool("no-auto-trust", false, "serve without installing the CA into browser profiles at startup")
+
+		showVersion = flag.Bool("version", false, "print the version and exit")
 
 		navMode     = flag.String("nav-mode", "object", "object: the model follows the cap; camera: the camera does")
 		fullScale   = flag.Float64("full-scale", 350, "device units at full deflection, from -calibrate")
@@ -54,6 +66,11 @@ func main() {
 		buttons     = flag.String("buttons", "0=fit,1=menu", "button mapping, e.g. 0=fit,1=menu; actions: none, fit, menu, dominant-axis, rotation-lock")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	level := slog.LevelInfo
 	if *debug {
@@ -77,9 +94,51 @@ func main() {
 		return
 	}
 
-	if *cert == "" || *key == "" {
-		log.Error("-cert and -key are required; run scripts/dev-certs.sh first")
+	paths, err := resolveCertDir(*certDir)
+	if err != nil {
+		log.Error("cannot locate the credential directory", "err", err)
+		os.Exit(1)
+	}
+
+	switch {
+	case *doSelftest:
+		if err := runSelftest(paths, *sockPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	case *doTrust:
+		if err := runTrust(log, paths); err != nil {
+			log.Error("trust failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	case *doUntrust:
+		if err := runUntrust(log, paths); err != nil {
+			log.Error("untrust failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Explicit -cert/-key means the caller is managing credentials itself, so
+	// keep hands off both the files and the browser trust stores. Otherwise
+	// this is the packaged service, which is expected to arrive at a working
+	// browser on its own.
+	certFile, keyFile := *cert, *key
+	switch {
+	case (*cert == "") != (*key == ""):
+		log.Error("-cert and -key must be given together")
 		os.Exit(2)
+	case *cert == "":
+		certFile, keyFile, err = ensureCredentials(log, paths)
+		if err != nil {
+			log.Error("cannot prepare TLS credentials", "err", err)
+			os.Exit(1)
+		}
+		if !*noAutoTrust {
+			ensureTrust(log, paths)
+		}
 	}
 
 	opts := server.Options{
@@ -88,7 +147,10 @@ func main() {
 	}
 	switch *mode {
 	case "drive":
-		dev, err := spacenav.Dial(*sockPath, log)
+		// At login this can start before spacenavd has created its socket, so
+		// wait rather than exiting into a systemd restart loop. A device that
+		// is simply not plugged in still exits, and the unit restarts us.
+		dev, err := spacenav.WaitForDevice(*sockPath, deviceWait, log)
 		if err != nil {
 			log.Error("cannot reach the SpaceMouse", "err", err)
 			os.Exit(1)
@@ -155,7 +217,7 @@ func main() {
 	}()
 
 	log.Info("listening", "url", "https://"+addr, "version", version)
-	err := srv.ListenAndServeTLS(*cert, *key)
+	err = srv.ListenAndServeTLS(certFile, keyFile)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server failed", "err", err)
 		os.Exit(1)

@@ -11,7 +11,8 @@ internal/server/         HTTP/WS wiring, discovery endpoint, probe + orbit
 internal/spacenav/       spacenavd client, axis calibration
 internal/nav/            navigation model: deflection -> camera motion
 internal/certs/          CA and leaf generation, NSS trust injection
-scripts/                 dev certs, trust injection, dev servers
+packaging/               systemd user unit, deb maintainer scripts, nfpm
+scripts/                 build and run helpers
 web/testpage/            dependency-free browser harness
 ```
 
@@ -73,14 +74,21 @@ poll the latch. See doc 05.
 ## Running
 
 ```sh
-./scripts/dev-certs.sh        # CA + leaf into certs/ (gitignored)
-./scripts/trust-certs.sh      # inject the CA into every NSS store found
 ./scripts/run-dev.sh          # terminal 1: the bridge
 ./scripts/serve-testpage.sh   # terminal 2: http://localhost:8080/web/testpage/
 ```
 
-Restart the browser after `trust-certs.sh` — NSS reads its store at startup.
-`./scripts/untrust-certs.sh` reverses it.
+Certificates need no separate step: `internal/certs` generates the CA and leaf
+under `~/.local/share/spacemouse-bridge` on first start and installs the CA
+into every browser profile it finds. Restart the browser afterwards — NSS reads
+its store once, at startup. `-untrust` reverses the browser half; `-no-auto-trust`
+skips it; explicit `-cert`/`-key` opt out of the managed path entirely, and then
+the bridge touches neither the files nor the trust stores.
+
+The shell scripts that used to do this (`dev-certs.sh`, `trust-certs.sh`,
+`untrust-certs.sh`) are gone. They duplicated the packaged behaviour in a
+second language, which is exactly where a difference between "works on my
+machine" and "works after install" would have hidden.
 
 ### Modes
 
