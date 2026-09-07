@@ -170,3 +170,40 @@ func TestGesturesAreEvenlySplit(t *testing.T) {
 		t.Errorf("gestures split %d sliding / %d tipping, want 3 and 3", trans, rot)
 	}
 }
+
+// Two gestures landing on the identical peak means the device clamped there.
+// One peak below it is only however hard the user pushed, and reporting the
+// two the same way is what let 216 and 146 both look authoritative.
+func TestSaturatedDistinguishesAClampFromOneHardPush(t *testing.T) {
+	clamped := make([]spacenav.Deflection, len(gestures))
+	lower := make([]spacenav.Deflection, len(gestures))
+	var n int
+	for i := range gestures {
+		if gestures[i].rotation {
+			continue
+		}
+		n++
+		switch n {
+		case 1:
+			clamped[i].Peak, lower[i].Peak = 350, 350
+		case 2:
+			clamped[i].Peak, lower[i].Peak = 350, 265
+		default:
+			clamped[i].Peak, lower[i].Peak = 203, 203
+		}
+	}
+
+	if peak, hits := saturated(clamped, false); peak != 350 || hits != 2 {
+		t.Errorf("clamped: peak %d hits %d, want 350 and 2", peak, hits)
+	}
+	if peak, hits := saturated(lower, false); peak != 350 || hits != 1 {
+		t.Errorf("lower bound: peak %d hits %d, want 350 and 1", peak, hits)
+	}
+}
+
+func TestSaturatedReportsNothingWhenNothingWasDetected(t *testing.T) {
+	results := make([]spacenav.Deflection, len(gestures))
+	if peak, hits := saturated(results, false); peak != 0 || hits != 0 {
+		t.Errorf("peak %d hits %d, want 0 and 0 for an undetected group", peak, hits)
+	}
+}

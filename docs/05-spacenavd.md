@@ -271,14 +271,31 @@ From the spacenavd README, verbatim:
 > interface, in order to improve it past the proof of concept stage, and
 > make it a part of the free spacenav project.
 
-## Full deflection is not one number
+## Output saturates at ±350
 
-Measured on a SpaceMouse Compact, 2026-09-07. Sliding the cap to its limit and
-tipping it to its limit do not report the same magnitude, and the difference is
-large enough to matter: a single "push in any direction" measurement returned
-**216** on one run and **146** on the next, purely on which the user happened
-to do.
+Measured on a SpaceMouse Compact, 2026-09-07, from a 1176-sample `-read-mouse`
+dump taken while deliberately pushing every axis to its stop:
 
-Anything normalising device units must therefore keep translation and rotation
-scales apart, and anything *measuring* them must know which movement it asked
-for. See doc 10.
+| | max + | max − |
+|---|---|---|
+| `x`, `y`, `z` | 350 | 350 |
+| `rx`, `ry`, `rz` | 350 | 350 |
+
+All six axes, both directions, exactly 350. It is a clamp rather than a spring
+limit: 650 of 7056 axis readings (9.2%) sit at exactly 350 — the second most
+common value after zero — while the next magnitudes down (349, 348, 346, 341)
+are far rarer. That is a clipping plateau, not a distribution.
+
+**Consequences.**
+
+- Any calibration reading below 350 on this device is under-pushing, not a
+  measurement of the hardware. Single-push calibration returned 216 on one run
+  and 146 on the next for exactly that reason.
+- Two gestures landing on the *identical* peak is therefore evidence the clamp
+  was reached. A lone peak below it is only a lower bound. `-calibrate` says
+  which it got (doc 10).
+- 350 is not universal. `spnavrc` exposes `sensitivity`,
+  `sensitivity-translation` and `sensitivity-rotation` as independent knobs,
+  plus per-axis variants, so a tuned machine can clamp at different values for
+  sliding and tipping. That is why full scale is measured rather than assumed,
+  and why translation and rotation carry separate scales.

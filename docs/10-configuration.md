@@ -118,15 +118,26 @@ so a 48% swing in the measurement is a 48% swing in how sensitive the device
 feels. At 146 the puck reaches full speed at 42% of the deflection 350
 assumed. "Calibrated" cannot mean "whatever I got that time".
 
-The cause was that sliding the cap and tipping it do not produce the same
-magnitudes, so the answer depended on which the user happened to do. Two fixes,
-both of which use data that was already being collected and discarded:
+The cause was **under-pushing**, not the hardware. A later `-read-mouse` dump
+showed every axis of that device clamping at exactly ±350 in both directions
+(doc 05), so 216 and 146 were both simply short of the stop, and the built-in
+default of 350 had been right all along.
+
+Sliding and tipping can still differ on a tuned machine — `spnavrc` sets
+`sensitivity-translation` and `sensitivity-rotation` independently — so the two
+are measured and stored separately. On an untuned device they come out equal.
+
+Three fixes, all using data that was already being collected and discarded:
 
 - Full scale now comes from the **six deliberate gestures**, pooled into
   sliding and tipping, rather than from the improvised opening push. That push
   survives only to give gesture detection a provisional threshold.
 - Each half is normalised against its own scale. `RotationFullScale` of zero
   falls back to `FullScale`, so an old file behaves exactly as it did.
+- `-calibrate` reports whether a number is the **device limit** or a **lower
+  bound**. Two gestures reaching the identical peak means the clamp was hit; a
+  lone peak below it is just how hard the user pushed. Presenting both as
+  equally authoritative is what let 216 and 146 pass without suspicion.
 
 `-calibrate` also now shows the peak per gesture, and reports the ratio when
 the two halves differ by 1.4x or more. The absence of those numbers on screen

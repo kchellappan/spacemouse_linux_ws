@@ -527,13 +527,21 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 		rotScale = fullScale
 	}
 
-	fmt.Printf("    Full deflection: %d sliding, %d tipping. Resting noise floor %d.\n",
+	fmt.Printf("    Full deflection: %d sliding, %d tipping. Resting noise floor %d.\n\n",
 		transScale, rotScale, floor)
+
+	// Say whether each number is the device's limit or merely how hard the
+	// user pushed. Without this the output looks equally authoritative either
+	// way, which is how two runs of this command produced 216 and 146 with
+	// nothing on screen suggesting either was wrong.
+	reportConfidence(results, false, "Sliding")
+	reportConfidence(results, true, "Tipping")
+
 	if ratio := scaleRatio(transScale, rotScale); ratio >= 1.4 {
-		fmt.Printf("    They differ by %.1fx, which is why one number for both was\n", ratio)
-		fmt.Printf("    unreliable. Each half is now normalised against its own.\n")
+		fmt.Printf("    The halves differ by %.1fx. spnavrc tunes\n", ratio)
+		fmt.Printf("    sensitivity-translation and sensitivity-rotation separately, so\n")
+		fmt.Printf("    that is expected; each half is normalised against its own.\n\n")
 	}
-	fmt.Println()
 
 	// Persist it. Measuring a device and then printing the number at someone
 	// was the old behaviour, and it meant every install ran against the
@@ -562,6 +570,23 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 	fmt.Println("      systemctl --user restart spacemouse-bridge")
 	fmt.Println()
 	return nil
+}
+
+// reportConfidence says whether a measured full scale is the device's ceiling
+// or a lower bound, and what to do about it.
+func reportConfidence(results []spacenav.Deflection, rotation bool, label string) {
+	peak, hits := saturated(results, rotation)
+	if peak == 0 {
+		return
+	}
+	if hits >= 2 {
+		fmt.Printf("    %s reached %d on %d gestures — that is the device limit.\n",
+			label, peak, hits)
+		return
+	}
+	fmt.Printf("    %s peaked at %d on a single gesture, so it is a lower bound,\n", label, peak)
+	fmt.Printf("    not a limit. If %s feels sluggish, re-run and push to the stop.\n",
+		strings.ToLower(label))
 }
 
 // pushMeter shows the running peak and whether it is still climbing.
@@ -603,6 +628,28 @@ func groupScale(results []spacenav.Deflection, rotation bool) int32 {
 		}
 	}
 	return max
+}
+
+// saturated reports the group's peak and how many of its gestures reached that
+// exact value.
+//
+// Two gestures landing on the identical maximum means a clamp, not a
+// coincidence: spacenavd saturates at a fixed magnitude (measured at 350 on a
+// SpaceMouse Compact, doc 05), so hitting it twice proves the cap was pushed
+// to the limit. A lone peak below it is only a lower bound — whatever effort
+// the user happened to apply — which is exactly how this device reported 216
+// on one run and 146 on the next.
+func saturated(results []spacenav.Deflection, rotation bool) (peak int32, hits int) {
+	peak = groupScale(results, rotation)
+	if peak == 0 {
+		return 0, 0
+	}
+	for i, d := range results {
+		if i < len(gestures) && gestures[i].rotation == rotation && d.Peak == peak {
+			hits++
+		}
+	}
+	return peak, hits
 }
 
 // scaleRatio reports how far apart the two halves are, larger over smaller.
