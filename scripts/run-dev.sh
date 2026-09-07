@@ -8,7 +8,7 @@ CERTS="$ROOT/certs"
 [[ -f "$CERTS/fullchain.pem" ]] || { echo "run scripts/dev-certs.sh first" >&2; exit 1; }
 
 export PATH="$HOME/.local/go/bin:$PATH"
-cd "$ROOT/src"
+cd "$ROOT"
 go build -o "$ROOT/bin/spacemouse-bridge" ./cmd/spacemouse-bridge
 
 exec "$ROOT/bin/spacemouse-bridge" \

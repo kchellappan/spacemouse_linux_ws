@@ -6,8 +6,8 @@ import (
 	"math"
 	"time"
 
-	"spacemouse-bridge/internal/navlib"
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // Orbit slowly rotates the client's camera about its model centre.

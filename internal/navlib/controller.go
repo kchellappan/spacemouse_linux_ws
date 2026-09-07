@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // ClientInfo is the object the page sends when creating a 3dcontroller. It is

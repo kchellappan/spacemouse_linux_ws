@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"spacemouse-bridge/internal/navlib"
-	"spacemouse-bridge/internal/spacenav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 )
 
 func testConfig() Config {

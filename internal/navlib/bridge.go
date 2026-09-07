@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // Resource names the client uses in 3dx_rpc:create.

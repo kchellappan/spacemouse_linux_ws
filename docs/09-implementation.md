@@ -1,22 +1,26 @@
 # Implementation
 
-Go module in `src/`. Build with the toolchain in `~/.local/go` (installed
-outside apt; remove with `rm -rf ~/.local/go`).
+Go module rooted at the repository root. Build with the toolchain in
+`~/.local/go` (installed outside apt; remove with `rm -rf ~/.local/go`).
 
 ```
-src/
-  cmd/spacemouse-bridge/   flags, TLS, signal handling
-  internal/wamp/           WAMP v1: message codec, session, reverse-RPC
-  internal/navlib/         property model, quirks, matrix math, handshake
-  internal/server/         HTTP/WS wiring, discovery endpoint, probe + orbit
-  internal/spacenav/       spacenavd client, axis calibration
-  internal/nav/            navigation model: deflection -> camera motion
-scripts/                   dev certs, trust injection, dev servers
-web/testpage/              dependency-free browser harness
+cmd/spacemouse-bridge/   flags, TLS, signal handling
+internal/wamp/           WAMP v1: message codec, session, reverse-RPC
+internal/navlib/         property model, quirks, matrix math, handshake
+internal/server/         HTTP/WS wiring, discovery endpoint, probe + orbit
+internal/spacenav/       spacenavd client, axis calibration
+internal/nav/            navigation model: deflection -> camera motion
+internal/certs/          CA and leaf generation, NSS trust injection
+scripts/                 dev certs, trust injection, dev servers
+web/testpage/            dependency-free browser harness
 ```
 
-The module path is the placeholder `spacemouse-bridge`. Change `src/go.mod`
-and the imports when the GitHub repo exists.
+The module path is `github.com/kchellappan/spacemouse_linux_ws`. It matches
+the repository URL because Go resolves imports by fetching that address —
+identity and location are the same string. The Go tree sits at the root
+rather than under `src/` so that release tags can be plain `v0.1.0`; a module
+in a subdirectory requires tags prefixed with that subdirectory, which would
+collide with the tags carrying the `.deb`.
 
 ## Design decisions worth knowing
 
@@ -142,7 +146,7 @@ discovered. On a **SpaceMouse Compact**, 0 is the left button and 1 the right
 ## Tests
 
 ```sh
-cd src && go test ./...
+go test ./...
 ```
 
 - `internal/navlib` — quirks derivation across versions, both matrix layouts

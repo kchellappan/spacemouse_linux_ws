@@ -17,9 +17,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"spacemouse-bridge/internal/navlib"
-	"spacemouse-bridge/internal/server"
-	"spacemouse-bridge/internal/wamp"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/wamp"
 )
 
 // fakeClient plays the part of 3DconnexionJS: it performs the handshake and
