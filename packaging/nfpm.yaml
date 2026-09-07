@@ -9,6 +9,7 @@ section: utils
 priority: optional
 maintainer: kchellappan <k.chellappan92@gmail.com>
 homepage: https://github.com/kchellappan/spacemouse_linux_ws
+license: MIT
 description: |
   SpaceMouse support for browser-based CAD on Linux.
   Bridges a 3Dconnexion SpaceMouse to web applications that use the
@@ -37,6 +38,12 @@ contents:
 
   - src: ./README.md
     dst: /usr/share/doc/spacemouse-bridge/README.md
+    file_info:
+      mode: 0644
+
+  # Debian expects the licence at this path, not as LICENSE.
+  - src: ./LICENSE
+    dst: /usr/share/doc/spacemouse-bridge/copyright
     file_info:
       mode: 0644
 

@@ -197,6 +197,34 @@ a shallow clone or a missing tag would otherwise produce silently.
 - amd64 only. `ARCH=arm64 scripts/build-deb.sh` works; nothing publishes it.
 - `preremove` cannot stop instances already running in user sessions.
 
+## Licensing
+
+The project is MIT. The question that actually needed answering was whether
+anything from the 3DxWare SDK ended up in it.
+
+**Audit, 2026-09-07.** Every line of 45 characters or more from `cmd/`,
+`internal/`, `web/`, `scripts/`, `packaging/`, `docs/` and the README was
+checked against all 448 files in `3DxWare_SDK_v4-0-6_r22071`. No line appears
+verbatim in the SDK. Rerun it before any release that adds substantial code.
+
+What *is* derived from the SDK is interface information: navlib property names
+(doc 01), the hardcoded loopback address and port (doc 02), the V3DK button
+codes, and the NL-Proxy version string the discovery endpoint reports. These
+are identifiers that must match for a page to talk to a driver at all. Each is
+documented with its source cited.
+
+The SDK itself is not redistributed — it is gitignored, and only the test
+harness needs it, from a copy the developer downloads. That sidesteps the
+clause restricting redistribution of the JS components to web applications
+operating exclusively with 3Dconnexion products.
+
+Two clauses in the SDK EULA are worth a read by anyone building on this. The
+grant is limited to integrating with 3Dconnexion hardware, which is what this
+does. And it forbids using SDK elements to create or enhance a product that
+*competes* with a 3Dconnexion product; 3Dconnexion ships no Linux driver, so
+this fills a gap rather than displacing something they sell. That is an
+observation, not legal advice.
+
 ## Notes for a public release
 
 - The bridge is useful beyond Onshape — any site using `3dconnexion.js` works,

@@ -118,3 +118,28 @@ open `http://localhost:8080/web/testpage/`. That harness loads 3Dconnexion's
 `3DconnexionJS` from the vendor SDK, which is **not** included in this repo —
 download `3DxWare_SDK_v4-0-6_r22071` from 3dconnexion.com and unpack it at the
 repo root.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+### Relationship to the 3Dconnexion SDK
+
+This repository contains no 3Dconnexion code. The 3DxWare SDK is not vendored
+here; the test harness loads `3DconnexionJS` from a copy you download yourself,
+and the bridge does not depend on the SDK at build or run time.
+
+What *is* derived from it is interface information needed to interoperate:
+navlib property names, the loopback address and port the client library
+hardcodes, the V3DK button codes, and the version string the real NL-Proxy
+reports. These are the identifiers that have to match for a page to talk to a
+driver at all, and they are documented in [docs/](docs/) with their sources
+cited.
+
+The SDK carries its own licence, which governs your copy of it rather than
+this software. Two clauses are worth reading before you build on this: the
+grant is limited to integrating with 3Dconnexion hardware, which is what this
+does; and it forbids using SDK elements to create or enhance a product that
+competes with a 3Dconnexion product. 3Dconnexion ships no Linux driver, so
+this fills a gap rather than displacing something they sell — but that is an
+observation, not legal advice, and the judgement is yours.
