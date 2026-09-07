@@ -1,5 +1,13 @@
 # spacemouse-linux-ws
 
+> **Built with AI.** Most of this repository — the Go implementation, the
+> packaging, and the notes under [`docs/`](docs/) — was written by Claude
+> Opus 5 in Claude Code, directed and reviewed by a human. The protocol and
+> hardware findings were verified empirically, against a real SpaceMouse and
+> real browsers, rather than taken on the model's word; the docs mark what was
+> measured separately from what was inferred, and record the occasions where
+> the two disagreed.
+
 A Linux bridge that lets a 3Dconnexion SpaceMouse drive browser-based CAD —
 primarily [Onshape](https://onshape.com) — on Ubuntu, where 3Dconnexion ships
 no driver.
