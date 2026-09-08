@@ -232,8 +232,11 @@ func main() {
 			os.Exit(2)
 		}
 
-		if settings.FullScale == config.Default().FullScale {
-			log.Warn("using the built-in full scale; run -calibrate to measure this device",
+		// Asking whether calibration ran, not what it produced: a correctly
+		// calibrated SpaceMouse reports exactly the built-in 350, so
+		// comparing against the default warned on every success.
+		if !settings.Calibrated() {
+			log.Warn("this device has not been calibrated; run -calibrate",
 				"fullScale", settings.FullScale)
 		}
 
@@ -299,8 +302,17 @@ func main() {
 		_ = srv.Shutdown(sc)
 	}()
 
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Error("cannot bind", "addr", addr, "err", err)
+		os.Exit(1)
+	}
+
 	log.Info("listening", "url", "https://"+addr, "version", version)
-	err = srv.ListenAndServeTLS(certFile, keyFile)
+	// PlaintextRedirect answers http:// with a redirect rather than Go's
+	// "Client sent an HTTP request to an HTTPS server", which is what a user
+	// typing the bare address would otherwise see.
+	err = srv.ServeTLS(server.PlaintextRedirect(ln, log), certFile, keyFile)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server failed", "err", err)
 		os.Exit(1)
@@ -569,6 +581,7 @@ func runCalibrate(socket, cfgPath string, settings config.Config, log *slog.Logg
 	settings.FullScale = float64(transScale)
 	settings.RotationFullScale = float64(rotScale)
 	settings.NoiseFloor = float64(floor)
+	settings.CalibratedAt = time.Now()
 	fullScale = transScale
 
 	// A dead zone below the resting offset lets the view drift while nobody

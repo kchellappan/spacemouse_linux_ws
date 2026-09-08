@@ -113,13 +113,14 @@ func checkSettings(r *report, path string, c config.Config) {
 			"run -calibrate to measure this device and write one")
 		return
 	}
-	if c.FullScale == config.Default().FullScale {
-		r.warn("settings", fmt.Sprintf("%s, but full scale is still the built-in %g",
-			shortenHome(path), c.FullScale),
-			"run -calibrate; an unmeasured full scale costs sensitivity")
+	if !c.Calibrated() {
+		r.warn("settings", shortenHome(path)+", but this device has never been calibrated",
+			"run -calibrate; it also measures the noise floor and confirms the axis map")
 		return
 	}
-	r.ok("settings", fmt.Sprintf("%s, full scale %g", shortenHome(path), c.FullScale))
+	r.ok("settings", fmt.Sprintf("%s, full scale %g/%g, calibrated %s",
+		shortenHome(path), c.FullScale, c.RotationFullScale,
+		c.CalibratedAt.Format(time.DateOnly)))
 }
 
 func checkSpacenavd(r *report, socket string) {

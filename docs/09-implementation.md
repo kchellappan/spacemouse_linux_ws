@@ -53,6 +53,18 @@ read-only, because the log discloses which sites connected. See doc 10.
 **The certutil sweep is cached for 10 seconds.** Checking trust forks a process
 per browser profile, and the page polls ten times a second.
 
+**Plain HTTP is redirected, not rejected.** Browsers default a bare
+`host:port` to `http://`, and this address is typed rather than clicked, so
+Go's "Client sent an HTTP request to an HTTPS server" is what a user sees
+first. `server.PlaintextRedirect` classifies each connection by its first byte
+— `0x16` is a TLS handshake record, which no HTTP method can start with — and
+answers plaintext with a 308 that preserves the path.
+
+Classification runs per connection in its own goroutine rather than inline in
+`Accept`. Doing it inline means one client that connects and sends nothing
+stalls every connection behind it, and browsers open speculative connections
+routinely. A test pins that.
+
 ## Design decisions worth knowing
 
 **HTTP/1.1 is forced** (`TLSNextProto` set to an empty map). Go negotiates h2
