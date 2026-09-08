@@ -281,10 +281,12 @@ dump taken while deliberately pushing every axis to its stop:
 | `x`, `y`, `z` | 350 | 350 |
 | `rx`, `ry`, `rz` | 350 | 350 |
 
-All six axes, both directions, exactly 350. It is a clamp rather than a spring
-limit: 650 of 7056 axis readings (9.2%) sit at exactly 350 — the second most
-common value after zero — while the next magnitudes down (349, 348, 346, 341)
-are far rarer. That is a clipping plateau, not a distribution.
+All six axes, both directions, exactly 350. It is the device's *reporting*
+limit rather than a spring limit: 650 of 7056 axis readings (9.2%) sit at
+exactly 350 — the second most common value after zero — while the next
+magnitudes down (349, 348, 346, 341) are far rarer. A spring would give a
+distribution; this is a plateau, which means the value is being saturated
+rather than measured.
 
 **Where 350 comes from.** Not spacenavd, and not the spring. It is the value
 the device's own HID report descriptor declares, once, covering all six axes:
