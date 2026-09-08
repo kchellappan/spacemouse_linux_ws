@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
 )
@@ -223,5 +224,85 @@ func TestNavCarriesBothScales(t *testing.T) {
 	n := c.Nav()
 	if n.FullScale != 216 || n.RotationFullScale != 146 {
 		t.Errorf("nav scales = %v/%v, want 216/146", n.FullScale, n.RotationFullScale)
+	}
+}
+
+// A correctly calibrated SpaceMouse reports exactly the built-in 350, so
+// whether calibration ran cannot be inferred from the values. It is recorded.
+func TestCalibratedIsFalseUntilCalibrationWrites(t *testing.T) {
+	if Default().Calibrated() {
+		t.Error("the built-in defaults report themselves as calibrated")
+	}
+
+	c := Default()
+	c.FullScale = 350 // the value a real calibration produces on a stock device
+	if c.Calibrated() {
+		t.Error("a device whose measured full scale equals the default reads as uncalibrated")
+	}
+
+	c.CalibratedAt = time.Now()
+	if !c.Calibrated() {
+		t.Error("a stamped configuration does not report as calibrated")
+	}
+}
+
+// Version 2 files carry no calibratedAt. Calibration is the only writer, so
+// the file existing is itself evidence it ran, and its mtime is when.
+func TestVersion2FileTakesCalibrationTimeFromTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"version": 2, "fullScale": 350, "rotationFullScale": 310}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(path, want, want); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Calibrated() {
+		t.Fatal("a version 2 file was treated as never calibrated")
+	}
+	if !c.CalibratedAt.Truncate(time.Second).Equal(want) {
+		t.Errorf("calibratedAt = %v, want the file's mtime %v", c.CalibratedAt, want)
+	}
+	if c.Version != Version {
+		t.Errorf("version = %d, want %d", c.Version, Version)
+	}
+}
+
+// Missing file means nothing has ever been calibrated, and no mtime exists to
+// borrow.
+func TestNoFileMeansNotCalibrated(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "absent.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Calibrated() {
+		t.Error("an absent file reported as calibrated")
+	}
+}
+
+// A current file states its own calibration time and must not have the file's
+// mtime substituted, which would change every time anything rewrites it.
+func TestVersion3FileKeepsItsOwnCalibrationTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	stamp := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+
+	want := Default()
+	want.CalibratedAt = stamp
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CalibratedAt.Equal(stamp) {
+		t.Errorf("calibratedAt = %v, want the recorded %v", got.CalibratedAt, stamp)
 	}
 }

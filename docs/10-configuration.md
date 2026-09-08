@@ -46,11 +46,12 @@ documents itself by example.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "navMode": "object",
   "fullScale": 216,
   "rotationFullScale": 146,
   "noiseFloor": 6,
+  "calibratedAt": "2026-09-07T11:25:38-07:00",
   "deadzone": 0.06,
   "curve": 1.6,
   "panSpeed": 0.9,
@@ -71,6 +72,7 @@ documents itself by example.
 | `fullScale` | Device magnitude when the cap is **slid** to its limit. Measured by `-calibrate`. |
 | `rotationFullScale` | The same when the cap is **tipped or twisted**. Separate because the two do not share a range — see below. |
 | `noiseFloor` | Resting offset, recorded for diagnosis. Nothing reads it yet. |
+| `calibratedAt` | When `-calibrate` last wrote this file. Absent means never. |
 | `deadzone` | Fraction of full scale to ignore. Must exceed the noise floor or the view drifts when idle (doc 05). |
 | `curve` | Response exponent. 1 is linear; higher gives finer control near centre. |
 | `panSpeed` | Model diagonals per second at full deflection. |
@@ -97,10 +99,25 @@ save cannot leave a half-written file that the next start refuses to parse.
 |---|---|
 | 1 | Initial. One `fullScale` for the whole device. |
 | 2 | Split `rotationFullScale` out of `fullScale`. |
+| 3 | Added `calibratedAt`. |
 
 A version 1 file is migrated on load by copying `fullScale` into
-`rotationFullScale`, which is what it effectively meant. The migration happens
-in memory; the file is only rewritten when something saves it.
+`rotationFullScale`, which is what it effectively meant. A version 2 file gets
+its `calibratedAt` from the file's own modification time: calibration is the
+only thing that writes this file, so the file existing is itself evidence it
+ran. Both migrations happen in memory; the file is only rewritten when
+something saves it.
+
+## Whether a device has been calibrated is recorded, not inferred
+
+The first version of the "have you calibrated?" check compared `fullScale`
+against the built-in default. That is wrong for the most common case there is:
+a correctly calibrated stock device measures **exactly** the built-in 350, so
+every successful calibration was reported as a missing one, on every service
+start and in every `-selftest`. A warning that fires on success teaches people
+to ignore warnings.
+
+`calibratedAt` records the fact instead of guessing at it from the values.
 
 ## Why full scale is two numbers
 

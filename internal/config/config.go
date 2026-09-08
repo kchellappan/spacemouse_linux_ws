@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
 )
@@ -29,7 +30,11 @@ import (
 //
 // 2 split rotationFullScale out of fullScale. A version 1 file is migrated on
 // load by copying fullScale into it, which is what it effectively meant.
-const Version = 2
+//
+// 3 added calibratedAt. Older files are migrated by taking the file's
+// modification time: the only thing that writes this file is calibration, so
+// the file existing is itself evidence calibration ran.
+const Version = 3
 
 // Config is the persisted form. It deliberately mirrors what a user can tune
 // rather than nav.Config exactly: navigation internals should be free to move
@@ -47,6 +52,16 @@ type Config struct {
 	FullScale         float64 `json:"fullScale"`
 	RotationFullScale float64 `json:"rotationFullScale"`
 	NoiseFloor        float64 `json:"noiseFloor"`
+
+	// CalibratedAt is when -calibrate last wrote this file, and zero if it
+	// never has.
+	//
+	// Whether the device has been measured cannot be inferred from the
+	// values: a correctly calibrated SpaceMouse reports exactly the built-in
+	// 350, so comparing against the default flagged every successful
+	// calibration as a missing one. A warning that fires on success teaches
+	// people to ignore warnings.
+	CalibratedAt time.Time `json:"calibratedAt"`
 
 	Deadzone float64 `json:"deadzone"`
 	Curve    float64 `json:"curve"`
@@ -123,18 +138,33 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Default(), fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return migrate(c), nil
+
+	var modTime time.Time
+	if fi, err := os.Stat(path); err == nil {
+		modTime = fi.ModTime()
+	}
+	return migrate(c, modTime), nil
 }
 
-// migrate brings an older file forward. Version 1 had a single fullScale
-// covering both halves, so that is what its rotation scale was.
-func migrate(c Config) Config {
+// migrate brings an older file forward.
+//
+// Version 1 had a single fullScale covering both halves, so that is what its
+// rotation scale was. Version 2 had no calibratedAt; the file's modification
+// time stands in, because calibration is the only thing that writes it, so
+// the file existing at all is evidence calibration ran.
+func migrate(c Config, modTime time.Time) Config {
 	if c.Version < 2 {
 		c.RotationFullScale = c.FullScale
+	}
+	if c.Version < 3 && c.CalibratedAt.IsZero() {
+		c.CalibratedAt = modTime
 	}
 	c.Version = Version
 	return c
 }
+
+// Calibrated reports whether -calibrate has ever written this configuration.
+func (c Config) Calibrated() bool { return !c.CalibratedAt.IsZero() }
 
 // Save writes the complete configuration, creating the directory as needed.
 //
