@@ -201,7 +201,7 @@ func main() {
 		Log:         log,
 		ServerIdent: "spacemouse-bridge " + version,
 		Clients:     ui.clients,
-		UI:          webui.New(ui.snapshot, logs),
+		UI:          webui.New(ui.snapshot, logs, ui.newScene),
 	}
 	// deviceDead is nil outside drive mode, and a nil channel blocks forever
 	// in a select, which is exactly the behaviour we want there.

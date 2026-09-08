@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spacemouse-bridge — self test</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header>
+  <h1>self test</h1>
+  <span class="meta"><a href="/">&larr; status</a></span>
+  <span class="live" id="live">connecting <b>&bull;</b></span>
+</header>
+
+<main>
+  <p class="meta" id="intro">
+    Move the puck. The cube is driven by the same navigation model the bridge
+    uses on a real CAD page, so if it responds correctly here but not in your
+    CAD application, the fault is on the browser side rather than the device.
+    Reload this page to recentre the view.
+  </p>
+
+  <div class="card" style="margin-top:1rem">
+    <canvas id="scene" width="720" height="440"></canvas>
+  </div>
+
+  <div class="grid" style="margin-top:.9rem">
+    <section class="card">
+      <h2>what to expect</h2>
+      <table><tbody>
+        <tr><td>slide right</td><td>cube slides right</td></tr>
+        <tr><td>push away</td><td>cube moves away, appears smaller</td></tr>
+        <tr><td>pull up</td><td>cube rises</td></tr>
+        <tr><td>tip forward</td><td>top face rotates towards you</td></tr>
+        <tr><td>twist clockwise</td><td>cube yaws right</td></tr>
+        <tr><td>tip right</td><td>cube rolls right</td></tr>
+      </tbody></table>
+    </section>
+    <section class="card">
+      <h2>state</h2>
+      <dl>
+        <dt>moving</dt><dd id="moving">no</dd>
+        <dt>frames</dt><dd id="frames">0</dd>
+      </dl>
+    </section>
+  </div>
+</main>
+
+<script src="/assets/test.js"></script>
+</body>
+</html>

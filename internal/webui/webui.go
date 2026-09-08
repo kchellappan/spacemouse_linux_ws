@@ -91,6 +91,27 @@ type NSSStatus struct {
 	Trusted bool   `json:"trusted"`
 }
 
+// SceneFrame is one step of the built-in test scene: a camera pose the page
+// renders, computed by the real navigation model rather than by JavaScript.
+//
+// Running the model server-side is the point. A JavaScript re-implementation
+// would be a lookalike, and a bug in the lookalike would be indistinguishable
+// from a bug in the bridge — which is exactly the question this scene exists
+// to answer.
+type SceneFrame struct {
+	// Camera is the camera-to-world matrix, column-major, 16 elements.
+	Camera []float64 `json:"camera"`
+	Moved  bool      `json:"moved"`
+}
+
+// SceneStepper advances one viewer's scene by dt.
+type SceneStepper func(dt time.Duration) SceneFrame
+
+// SceneFactory creates an independent scene per viewer, so two open tabs do
+// not fight over one camera, and so reconnecting resets the view — which is
+// the whole reset mechanism, and needs no mutating endpoint to provide.
+type SceneFactory func() SceneStepper
+
 // Source provides the current state. Implemented by main, which is the only
 // place that can see the device, the settings and the certificates at once.
 type Source func() Snapshot
@@ -100,11 +121,14 @@ type Handler struct {
 	mux    *http.ServeMux
 	source Source
 	logs   *logbuf.Buffer
+	scenes SceneFactory
 }
 
-// New returns a handler serving the status UI.
-func New(source Source, logs *logbuf.Buffer) *Handler {
-	h := &Handler{mux: http.NewServeMux(), source: source, logs: logs}
+// New returns a handler serving the status UI. scenes may be nil, in which
+// case the test scene reports that it is unavailable rather than 404ing,
+// which is a clearer answer for a page that is already open.
+func New(source Source, logs *logbuf.Buffer, scenes SceneFactory) *Handler {
+	h := &Handler{mux: http.NewServeMux(), source: source, logs: logs, scenes: scenes}
 
 	sub, err := fs.Sub(assets, "assets")
 	if err != nil {
@@ -116,6 +140,8 @@ func New(source Source, logs *logbuf.Buffer) *Handler {
 	h.mux.HandleFunc("/api/status", h.status)
 	h.mux.HandleFunc("/api/logs", h.logsHandler)
 	h.mux.HandleFunc("/api/events", h.events)
+	h.mux.HandleFunc("/api/scene", h.scene)
+	h.mux.HandleFunc("/test", h.testPage)
 	h.mux.HandleFunc("/", h.index)
 	return h
 }
@@ -127,9 +153,13 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	page, err := assets.ReadFile("assets/index.html")
+	h.page(w, "assets/index.html")
+}
+
+func (h *Handler) page(w http.ResponseWriter, name string) {
+	page, err := assets.ReadFile(name)
 	if err != nil {
-		http.Error(w, "status page missing", http.StatusInternalServerError)
+		http.Error(w, "page missing", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -139,6 +169,57 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(page)
+}
+
+func (h *Handler) testPage(w http.ResponseWriter, r *http.Request) {
+	h.page(w, "assets/test.html")
+}
+
+// scene streams camera poses for the built-in test scene.
+//
+// The frame rate is higher than the status stream's: this one is watched while
+// moving the puck, and a laggy cube reads as broken navigation rather than a
+// throttled page.
+func (h *Handler) scene(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	if h.scenes == nil {
+		http.Error(w, "the test scene needs -mode drive", http.StatusServiceUnavailable)
+		return
+	}
+	step := h.scenes()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	const interval = 16 * time.Millisecond
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+
+	last := time.Now()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case now := <-tick.C:
+			dt := now.Sub(last)
+			last = now
+			data, err := json.Marshal(step(dt))
+			if err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {

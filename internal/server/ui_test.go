@@ -20,7 +20,7 @@ func uiServer(t *testing.T) *httptest.Server {
 		Log:            quietLogger(),
 		NLProxyVersion: "1.4.8.21486",
 		Clients:        server.NewClients(),
-		UI:             webui.New(func() webui.Snapshot { return webui.Snapshot{Version: "test"} }, logs),
+		UI:             webui.New(func() webui.Snapshot { return webui.Snapshot{Version: "test"} }, logs, nil),
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

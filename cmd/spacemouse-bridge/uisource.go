@@ -6,6 +6,8 @@ import (
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/certs"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/config"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/navlib"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/webui"
@@ -139,4 +141,56 @@ func (c *trustCache) get() ([]webui.NSSStatus, []string) {
 	c.browsers = certs.RunningBrowsers()
 	c.updated = time.Now()
 	return c.profiles, c.browsers
+}
+
+// newScene returns an independent test scene driven by the real navigation
+// model.
+//
+// The point of running nav.Step here rather than re-deriving the camera in
+// JavaScript is diagnostic: if the built-in scene moves correctly but a CAD
+// site does not, the fault is in the WAMP layer or the client; if the scene
+// is wrong too, it is the device path or the navigation model. A lookalike in
+// the page could not distinguish those.
+func (u *uiState) newScene() webui.SceneStepper {
+	return newSceneWith(u.settings.Nav(), u.motion)
+}
+
+// motion is the current deflection, or nothing when no device is open.
+func (u *uiState) motion() spacenav.Motion {
+	if u.device == nil {
+		return spacenav.Motion{}
+	}
+	return u.device.State()
+}
+
+// newSceneWith is the testable core: it takes the navigation configuration and
+// a source of deflection rather than reaching for a device.
+func newSceneWith(cfg nav.Config, motion func() spacenav.Motion) webui.SceneStepper {
+	// A unit model at the origin, viewed from four diagonal-lengths back, so
+	// speeds expressed in model diagonals per second come out at a sensible
+	// rate without any special-casing.
+	const half = 0.5
+	model := navlib.Box{-half, -half, -half, half, half, half}
+
+	scene := nav.Scene{
+		Camera:        navlib.Identity4(),
+		Pivot:         [3]float64{0, 0, 0},
+		ModelDiagonal: model.Diagonal(),
+		ModelExtents:  model,
+		Perspective:   true,
+		Rotatable:     true,
+	}
+	// Back the camera off along its own +Z, which points out of the screen.
+	scene.Camera = navlib.Translate([3]float64{0, 0, 4 * model.Diagonal()}).Mul(scene.Camera)
+
+	return func(dt time.Duration) webui.SceneFrame {
+		res := cfg.Step(motion(), dt, scene)
+		scene.Camera = res.Camera
+
+		// Copy: the caller marshals this while the next step is already
+		// writing the scene's own matrix.
+		out := make([]float64, 16)
+		copy(out, scene.Camera[:])
+		return webui.SceneFrame{Camera: out, Moved: res.Moved}
+	}
 }

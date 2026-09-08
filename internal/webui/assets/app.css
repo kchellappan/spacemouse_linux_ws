@@ -74,3 +74,8 @@ td { padding: .18rem 0; border-top: 1px solid var(--line); overflow-wrap: anywhe
 .rec.ERROR .lvl { color: var(--bad); }
 .rec .msg { overflow-wrap: anywhere; }
 .rec .at { color: var(--dim); }
+
+canvas { display: block; width: 100%; background: transparent; }
+header a { color: var(--accent); text-decoration: none; }
+header a:hover { text-decoration: underline; }
+#intro { max-width: 46rem; }

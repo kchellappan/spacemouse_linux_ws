@@ -53,6 +53,26 @@ read-only, because the log discloses which sites connected. See doc 10.
 **The certutil sweep is cached for 10 seconds.** Checking trust forks a process
 per browser profile, and the page polls ten times a second.
 
+**The self-test scene runs the real navigation model server-side.** `/test`
+renders a cube driven by `nav.Step` against a synthetic unit model, with the
+camera pose streamed over SSE at ~60 Hz; the page only projects and draws.
+
+Re-deriving the camera in JavaScript would have been easier and wrong. It
+would be a lookalike, and a bug in the lookalike would be indistinguishable
+from a bug in the bridge — which is the exact question the page exists to
+answer. As built, it splits the fault cleanly: if the cube moves correctly
+here but a CAD site does not, the problem is the WAMP layer or the client; if
+the cube is wrong too, it is the device path or the navigation model.
+
+Each connection gets its own scene, so two tabs do not fight over one camera
+and reloading recentres the view — which is the entire reset mechanism, and it
+needs no mutating endpoint.
+
+Nothing from the 3Dconnexion SDK is involved. `web/testpage/` remains the
+developer harness for exercising the real `3DconnexionJS` and the full WAMP
+path; the shipped page deliberately does not, which keeps the SDK out of the
+`.deb` (doc 08).
+
 **Plain HTTP is redirected, not rejected.** Browsers default a bare
 `host:port` to `http://`, and this address is typed rather than clicked, so
 Go's "Client sent an HTTP request to an HTTPS server" is what a user sees
