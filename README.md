@@ -106,6 +106,11 @@ which pages are connected and what client library they run, certificate and
 per-profile browser trust, and a live log — useful when the browser is the
 thing that is broken and `journalctl` is out of reach.
 
+The **self test** at https://127.51.68.120:8181/test draws a cube driven by
+the same navigation model the bridge uses on a real CAD page. If it responds
+correctly there but your CAD application does not, the fault is on the browser
+side rather than the device.
+
 ### When something is wrong
 
 ```sh

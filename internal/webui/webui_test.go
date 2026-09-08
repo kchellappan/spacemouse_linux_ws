@@ -16,7 +16,7 @@ import (
 func newHandler(t *testing.T) (*Handler, *logbuf.Buffer) {
 	t.Helper()
 	logs := logbuf.New(50)
-	return New(func() Snapshot { return Snapshot{Version: "test", Listen: "127.51.68.120:8181"} }, logs), logs
+	return New(func() Snapshot { return Snapshot{Version: "test", Listen: "127.51.68.120:8181"} }, logs, nil), logs
 }
 
 func TestStatusReturnsTheSnapshot(t *testing.T) {
@@ -126,5 +126,105 @@ func TestIndexIsNotServedForUnknownPaths(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("unknown path returned %d, want 404", rec.Code)
+	}
+}
+
+func handlerWithScene(t *testing.T, scenes SceneFactory) *Handler {
+	t.Helper()
+	return New(func() Snapshot { return Snapshot{Version: "test"} }, logbuf.New(10), scenes)
+}
+
+func TestSceneStreamsFrames(t *testing.T) {
+	var n int
+	h := handlerWithScene(t, func() SceneStepper {
+		return func(time.Duration) SceneFrame {
+			n++
+			return SceneFrame{Camera: make([]float64, 16), Moved: n%2 == 0}
+		}
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/scene", nil)
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if strings.HasPrefix(sc.Text(), "data: ") {
+			var f SceneFrame
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(sc.Text(), "data: ")), &f); err != nil {
+				t.Fatalf("frame is not valid JSON: %v", err)
+			}
+			if len(f.Camera) != 16 {
+				t.Errorf("camera has %d elements, want 16", len(f.Camera))
+			}
+			return
+		}
+	}
+	t.Error("no frame arrived on the scene stream")
+}
+
+// Outside drive mode there is no device to drive a scene. Saying so beats a
+// 404, which would look like a broken build to someone with the page open.
+func TestSceneReportsUnavailableWithoutADevice(t *testing.T) {
+	h := handlerWithScene(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/scene", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "drive") {
+		t.Errorf("body = %q, want it to name the mode required", rec.Body.String())
+	}
+}
+
+// Each connection gets its own scene, so reloading the page recentres.
+func TestEachSceneConnectionGetsItsOwnStepper(t *testing.T) {
+	var made int
+	h := handlerWithScene(t, func() SceneStepper {
+		made++
+		return func(time.Duration) SceneFrame { return SceneFrame{Camera: make([]float64, 16)} }
+	})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	for i := 0; i < 2; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/scene", nil)
+		resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		buf := make([]byte, 1)
+		_, _ = resp.Body.Read(buf)
+		resp.Body.Close()
+		cancel()
+	}
+	if made < 2 {
+		t.Errorf("the factory ran %d times for 2 connections", made)
+	}
+}
+
+func TestTestPageIsServed(t *testing.T) {
+	h := handlerWithScene(t, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /test returned %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "self test") {
+		t.Error("the page does not look like the self test")
 	}
 }
