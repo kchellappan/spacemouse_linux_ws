@@ -26,7 +26,10 @@ import (
 
 // Version is the schema version, so a later change can migrate rather than
 // guess at what an old file meant.
-const Version = 1
+//
+// 2 split rotationFullScale out of fullScale. A version 1 file is migrated on
+// load by copying fullScale into it, which is what it effectively meant.
+const Version = 2
 
 // Config is the persisted form. It deliberately mirrors what a user can tune
 // rather than nav.Config exactly: navigation internals should be free to move
@@ -37,11 +40,13 @@ type Config struct {
 	// NavMode is "object" (the model follows the cap) or "camera".
 	NavMode string `json:"navMode"`
 
-	// FullScale is the device magnitude at full deflection, measured by
-	// -calibrate. NoiseFloor is recorded alongside it for diagnosis; nothing
-	// reads it yet.
-	FullScale  float64 `json:"fullScale"`
-	NoiseFloor float64 `json:"noiseFloor"`
+	// FullScale and RotationFullScale are the device magnitudes at full
+	// deflection, measured by -calibrate. They are separate because sliding
+	// the cap and tipping it do not produce the same range. NoiseFloor is
+	// recorded alongside for diagnosis; nothing reads it yet.
+	FullScale         float64 `json:"fullScale"`
+	RotationFullScale float64 `json:"rotationFullScale"`
+	NoiseFloor        float64 `json:"noiseFloor"`
 
 	Deadzone float64 `json:"deadzone"`
 	Curve    float64 `json:"curve"`
@@ -61,15 +66,17 @@ type Config struct {
 	Buttons map[string]string `json:"buttons"`
 }
 
-// Default returns the built-in settings. FullScale is a typical SpaceMouse
-// Compact reading, not a measurement of the user's device — -calibrate
-// replaces it.
+// Default returns the built-in settings. The full-scale values come from the
+// HID logical maximum every 3Dconnexion axis declares, times spacenavd's
+// default sensitivity of 1.0 — correct on a machine with no spnavrc tuning
+// rather than a stand-in. See nav.DefaultConfig and docs/05-spacenavd.md.
 func Default() Config {
 	n := nav.DefaultConfig()
 	return Config{
 		Version:           Version,
 		NavMode:           "object",
 		FullScale:         n.FullScale,
+		RotationFullScale: n.RotationFullScale,
 		NoiseFloor:        0,
 		Deadzone:          n.Deadzone,
 		Curve:             n.Exponent,
@@ -116,7 +123,17 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Default(), fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return c, nil
+	return migrate(c), nil
+}
+
+// migrate brings an older file forward. Version 1 had a single fullScale
+// covering both halves, so that is what its rotation scale was.
+func migrate(c Config) Config {
+	if c.Version < 2 {
+		c.RotationFullScale = c.FullScale
+	}
+	c.Version = Version
+	return c
 }
 
 // Save writes the complete configuration, creating the directory as needed.
@@ -161,6 +178,7 @@ func Save(path string, c Config) error {
 func (c Config) Nav() nav.Config {
 	n := nav.DefaultConfig()
 	n.FullScale = c.FullScale
+	n.RotationFullScale = c.RotationFullScale
 	n.Deadzone = c.Deadzone
 	n.Exponent = c.Curve
 	n.TranslationSpeed = c.PanSpeed

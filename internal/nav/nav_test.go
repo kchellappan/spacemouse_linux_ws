@@ -57,14 +57,14 @@ func TestDeadzoneRescalesWithoutJump(t *testing.T) {
 	c := testConfig()
 	// Just inside the deadzone yields zero; just outside yields a small value,
 	// not an abrupt one.
-	if v := c.shape(int32(c.Deadzone*c.FullScale) - 1); v != 0 {
+	if v := c.shape(int32(c.Deadzone*c.FullScale)-1, c.FullScale); v != 0 {
 		t.Errorf("inside deadzone = %v, want 0", v)
 	}
-	just := c.shape(int32(c.Deadzone*c.FullScale) + 2)
+	just := c.shape(int32(c.Deadzone*c.FullScale)+2, c.FullScale)
 	if just <= 0 || just > 0.05 {
 		t.Errorf("just outside deadzone = %v, want a small positive value", just)
 	}
-	if full := c.shape(int32(c.FullScale)); !almost(full, 1, 1e-9) {
+	if full := c.shape(int32(c.FullScale), c.FullScale); !almost(full, 1, 1e-9) {
 		t.Errorf("full deflection = %v, want 1", full)
 	}
 }
@@ -387,5 +387,39 @@ func TestFitWithoutModelExtentsDoesNothing(t *testing.T) {
 	s.ModelExtents = navlib.Box{}
 	if r := Fit(s, 1); r.Moved {
 		t.Error("fit should be a no-op when the model bounds are unknown")
+	}
+}
+
+// Sliding and tipping are normalised against their own full scale. Sharing
+// one made whichever half was not measured feel wrong in proportion to how
+// far the two ranges differ.
+func TestRotationUsesItsOwnFullScale(t *testing.T) {
+	c := DefaultConfig()
+	c.FullScale = 300
+	c.RotationFullScale = 150
+	c.Deadzone = 0
+	c.Exponent = 1
+
+	a := c.shapeAll(spacenav.Motion{X: 150, RX: 150})
+	if !almost(a.x, 0.5, 1e-9) {
+		t.Errorf("translation at half its scale = %v, want 0.5", a.x)
+	}
+	if !almost(a.rx, 1, 1e-9) {
+		t.Errorf("rotation at its full scale = %v, want 1", a.rx)
+	}
+}
+
+// An older settings file carries no rotation scale. Falling back keeps it
+// behaving exactly as it did rather than dividing by zero and going numb.
+func TestRotationFallsBackToTranslationScale(t *testing.T) {
+	c := DefaultConfig()
+	c.FullScale = 200
+	c.RotationFullScale = 0
+	c.Deadzone = 0
+	c.Exponent = 1
+
+	a := c.shapeAll(spacenav.Motion{RX: 200})
+	if !almost(a.rx, 1, 1e-9) {
+		t.Errorf("rotation with no scale of its own = %v, want 1 via the fallback", a.rx)
 	}
 }

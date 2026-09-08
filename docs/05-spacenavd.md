@@ -270,3 +270,72 @@ From the spacenavd README, verbatim:
 > We're looking for someone interested to take over maintainance of that
 > interface, in order to improve it past the proof of concept stage, and
 > make it a part of the free spacenav project.
+
+## Output saturates at ±350
+
+Measured on a SpaceMouse Compact, 2026-09-07, from a 1176-sample `-read-mouse`
+dump taken while deliberately pushing every axis to its stop:
+
+| | max + | max − |
+|---|---|---|
+| `x`, `y`, `z` | 350 | 350 |
+| `rx`, `ry`, `rz` | 350 | 350 |
+
+All six axes, both directions, exactly 350. It is the device's *reporting*
+limit rather than a spring limit: 650 of 7056 axis readings (9.2%) sit at
+exactly 350 — the second most common value after zero — while the next
+magnitudes down (349, 348, 346, 341) are far rarer. A spring would give a
+distribution; this is a plateau, which means the value is being saturated
+rather than measured.
+
+**Where 350 comes from.** Not spacenavd, and not the spring. It is the value
+the device's own HID report descriptor declares, once, covering all six axes:
+
+```
+0x16, 0xA2, 0xFE,   //  Logical Minimum (-350)
+0x26, 0x5E, 0x01,   //  Logical Maximum (350)
+```
+
+spacenavd then applies sensitivity as a bare multiply with no clamp
+(`src/event.c`):
+
+```c
+inp->val = (int)((float)inp->val * cfg.sensitivity * axis_sens);
+```
+
+so:
+
+```
+full scale = 350 x cfg.sensitivity x per-half or per-axis sensitivity
+```
+
+`sensitivity` defaults to 1.0 and the measured machine has no `/etc/spnavrc`,
+which is why it saturates at exactly 350. The measurement and the descriptor
+close on each other.
+
+Sources: the HID descriptor is parsed in the [udev-hid-bpf SpaceNavigator case
+study](https://udev-hid-bpf-bentiss-648236040b7c508ff54e7bc3510428536d7fd37b91.pages.freedesktop.org/case-study-spacenavigator.html);
+the multiply is
+[`spacenavd/src/event.c`](https://github.com/FreeSpacenav/spacenavd/blob/master/src/event.c).
+
+**Consequences.**
+
+- Any calibration reading below 350 on this device is under-pushing, not a
+  measurement of the hardware. Single-push calibration returned 216 on one run
+  and 146 on the next for exactly that reason.
+- Two gestures landing on the *identical* peak is therefore evidence the clamp
+  was reached. A lone peak below it is only a lower bound. `-calibrate` says
+  which it got (doc 10).
+- 350 is not universal. `spnavrc` exposes `sensitivity`,
+  `sensitivity-translation` and `sensitivity-rotation` as independent knobs,
+  plus per-axis variants, so a tuned machine can saturate at different values
+  for sliding and tipping. That is why full scale is measured rather than
+  assumed, and why translation and rotation carry separate scales.
+- **No static number is guaranteed to stay right.** `spnavcfg` changes
+  sensitivity by talking to the daemon rather than editing the file, and
+  `bnactN = sensitivity-up` / `sensitivity-down` puts it on a button. Reading
+  `spnavrc` would therefore be an improvement on assuming 1.0, but not a
+  guarantee. Showing live axis magnitudes, so a user can see saturation
+  directly, is the durable answer — a job for the status UI.
+- Shipping a measured calibration in the package would be ceremony: it would
+  record 350, which is what the built-in default already is.
