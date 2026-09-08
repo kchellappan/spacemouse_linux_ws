@@ -197,7 +197,7 @@ needed sooner than expected: the log records which sites connected, so even a
 read-only endpoint discloses browsing activity. `/api` is mounted behind a
 same-origin check and carries no CORS headers, with tests pinning both.
 
-Rule 2 applies when the first mutating endpoint lands:
+Rule 2 is in force too, as of the tuning UI:
 
 1. **No CORS headers on `/api`.** `setCORS` currently echoes whatever `Origin`
    it is given, which is required for the discovery endpoint and wrong for
@@ -210,6 +210,33 @@ Rule 2 applies when the first mutating endpoint lands:
 3. **Reject a foreign `Origin` on mutating requests.** Browsers always attach
    it to `POST` and page JavaScript cannot forge it.
 
-Today the exposure is limited: the only thing a page can do over WAMP is drive
-its own camera. A mutating API changes that, and retrofitting these is harder
-than designing them in.
+All three are tested rather than asserted: a foreign `Origin` gets 403 on both
+reads and writes, a write with any simple content type gets 415 before it
+reaches the code that would apply it, and `/api` carries no CORS headers.
+
+## Live settings
+
+`PUT /api/settings` applies a change immediately; `?persist=1` also writes the
+file. They are separate so a user can feel a slider with the puck in their
+hand and still walk away without having changed anything on disk.
+
+The drive loop reads the settings every frame rather than capturing them at
+startup, which is what makes a slider change the feel mid-gesture. Buttons
+that toggle settings write back through the same holder, so the device and the
+page cannot end up describing different states.
+
+Two things the request path has to get right, both found by testing rather
+than by reasoning:
+
+- **Merge over what is in force, do not parse into a zero value.** The page
+  sends only what changed; parsing fresh would clear everything else. Same
+  reason `Load` does it.
+- **Copy the button map before decoding.** Assigning the struct shares it, and
+  `json.Unmarshal` merges into an existing map rather than replacing it — so
+  decoding a *rejected* update still mutated the settings in force,
+  permanently, and every later change then failed for a reason the user could
+  not see.
+
+Calibration is preserved across every update. It is measured, not chosen, and
+the tuning UI round-trips the whole document, so it would otherwise be able to
+erase a measurement by sending back what it rendered.

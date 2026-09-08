@@ -23,6 +23,7 @@ import (
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/config"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/logbuf"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/nav"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/webui"
@@ -187,21 +188,24 @@ func main() {
 		}
 	}
 
+	live := config.NewLive(settings)
 	ui := &uiState{
 		version:   version,
 		startedAt: time.Now(),
 		listen:    net.JoinHostPort(*host, fmt.Sprint(*port)),
-		settings:  settings,
+		live:      live,
+		cfgPath:   cfgPath,
 		paths:     paths,
 		clients:   server.NewClients(),
 		trust:     newTrustCache(paths, log),
+		log:       log,
 	}
 
 	opts := server.Options{
 		Log:         log,
 		ServerIdent: "spacemouse-bridge " + version,
 		Clients:     ui.clients,
-		UI:          webui.New(ui.snapshot, logs, ui.newScene),
+		UI:          webui.New(ui.snapshot, logs, ui.newScene, ui.applySettings),
 	}
 	// deviceDead is nil outside drive mode, and a nil channel blocks forever
 	// in a select, which is exactly the behaviour we want there.
@@ -240,11 +244,13 @@ func main() {
 				"fullScale", settings.FullScale)
 		}
 
+		_ = btns // validated above; the live mapping is read per frame below
 		opts.OnReady = server.Drive(log, server.DriveOptions{
 			Device:    dev,
-			Config:    settings.Nav(),
+			Config:    func() nav.Config { return live.Get().Nav() },
+			SetConfig: ui.adoptNav,
 			FrameRate: settings.FrameRate,
-			Buttons:   btns,
+			Buttons:   ui.buttons,
 		})
 	case "probe":
 		opts.OnReady = server.Probe(log)

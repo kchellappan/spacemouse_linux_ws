@@ -79,3 +79,24 @@ canvas { display: block; width: 100%; background: transparent; }
 header a { color: var(--accent); text-decoration: none; }
 header a:hover { text-decoration: underline; }
 #intro { max-width: 46rem; }
+
+.tuning { display: grid; gap: .55rem; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.tune { display: grid; grid-template-columns: 8.5rem 1fr 4rem; align-items: center; gap: .6rem; }
+.tune label { color: var(--dim); font-size: .84rem; }
+.tune input[type=range] { width: 100%; accent-color: var(--accent); }
+.tune output { font-family: var(--mono); font-size: .8rem; text-align: right; }
+.tune.check { grid-template-columns: 8.5rem 1fr; }
+.tune.check input { justify-self: start; width: 1rem; height: 1rem; accent-color: var(--accent); }
+.tune select {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 5px; padding: .2rem .35rem; font: inherit; font-size: .84rem;
+}
+.tune-actions { display: flex; align-items: center; gap: .6rem; margin-top: .9rem; }
+button {
+  font: inherit; font-size: .84rem; padding: .32rem .9rem; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+}
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+#tune-status.bad { color: var(--bad); }
+#tune-status.ok { color: var(--ok); }

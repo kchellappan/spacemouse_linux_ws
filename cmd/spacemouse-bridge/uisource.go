@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -20,10 +22,12 @@ type uiState struct {
 	startedAt time.Time
 	listen    string
 
-	device   *spacenav.Client // nil outside drive mode
-	settings config.Config
-	paths    certs.Paths
-	clients  *server.Clients
+	device  *spacenav.Client // nil outside drive mode
+	live    *config.Live
+	cfgPath string
+	paths   certs.Paths
+	clients *server.Clients
+	log     *slog.Logger
 
 	// trust is refreshed on a timer rather than per request: each check shells
 	// out to certutil once per profile, and the page polls ten times a second.
@@ -36,14 +40,15 @@ func (u *uiState) snapshot() webui.Snapshot {
 		Version:   u.version,
 		StartedAt: u.startedAt,
 		Listen:    u.listen,
-		Settings:  u.settings,
+		Settings:  u.live.Get(),
 	}
 
 	// The scales belong to the settings, not the device, so the page can draw
 	// its axes to the right range even when nothing is connected.
+	settings := u.live.Get()
 	s.Device = webui.Device{
-		FullScale:         u.settings.FullScale,
-		RotationFullScale: u.settings.RotationFullScale,
+		FullScale:         settings.FullScale,
+		RotationFullScale: settings.RotationFullScale,
 	}
 
 	if u.device != nil {
@@ -152,7 +157,34 @@ func (c *trustCache) get() ([]webui.NSSStatus, []string) {
 // is wrong too, it is the device path or the navigation model. A lookalike in
 // the page could not distinguish those.
 func (u *uiState) newScene() webui.SceneStepper {
-	return newSceneWith(u.settings.Nav(), u.motion)
+	return newSceneWith(u.live.Get().Nav(), u.motion)
+}
+
+// adoptNav records a navigation change the drive loop made itself, so a
+// button toggle and the web UI do not end up describing different states.
+func (u *uiState) adoptNav(n nav.Config) {
+	u.live.Update(func(c *config.Config) {
+		c.DominantAxis = n.DominantAxis
+		c.EnableRotation = n.EnableRotation
+		c.EnableTranslation = n.EnableTranslation
+		if n.Mode == nav.ModeCamera {
+			c.NavMode = "camera"
+		} else {
+			c.NavMode = "object"
+		}
+	})
+}
+
+// buttons is the live mapping, so a remap in the UI takes effect without a
+// reconnect. A malformed entry is dropped rather than failing the frame:
+// server.ParseButtons already rejected it when the settings were accepted.
+func (u *uiState) buttons() map[int]server.ButtonAction {
+	m, err := server.ParseButtons(u.live.Get().ButtonSpec())
+	if err != nil {
+		u.log.Warn("ignoring an unusable button mapping", "err", err)
+		return nil
+	}
+	return m
 }
 
 // motion is the current deflection, or nothing when no device is open.
@@ -193,4 +225,49 @@ func newSceneWith(cfg nav.Config, motion func() spacenav.Motion) webui.SceneStep
 		copy(out, scene.Camera[:])
 		return webui.SceneFrame{Camera: out, Moved: res.Moved}
 	}
+}
+
+// applySettings validates and applies a settings change from the web UI, and
+// writes it to disk when asked.
+//
+// The incoming document is merged over the settings in force rather than
+// parsed into a zero value, for the same reason Load does it: a page that
+// sends only the field it changed must not silently clear everything else.
+func (u *uiState) applySettings(body []byte, persist bool) error {
+	current := u.live.Get()
+
+	// Copy the map explicitly. Assigning the struct shares it, and
+	// json.Unmarshal merges into an existing map rather than replacing it —
+	// so decoding a rejected update would still have mutated the settings in
+	// force, permanently, with no way for the user to see why every later
+	// change then failed.
+	incoming := current
+	incoming.Buttons = make(map[string]string, len(current.Buttons))
+	for id, action := range current.Buttons {
+		incoming.Buttons[id] = action
+	}
+
+	if err := json.Unmarshal(body, &incoming); err != nil {
+		return fmt.Errorf("that is not valid settings JSON: %w", err)
+	}
+	// Calibration is measured, not chosen. Live.Set restores it too; this
+	// keeps the button mapping check below honest about what will be saved.
+	incoming.CalibratedAt = current.CalibratedAt
+
+	// One parser for button mappings, so the UI cannot accept a spelling the
+	// drive loop would then reject every frame.
+	if _, err := server.ParseButtons(incoming.ButtonSpec()); err != nil {
+		return err
+	}
+	if err := u.live.Set(incoming); err != nil {
+		return err
+	}
+
+	if persist {
+		if err := config.Save(u.cfgPath, u.live.Get()); err != nil {
+			return fmt.Errorf("applied, but saving failed: %w", err)
+		}
+		u.log.Info("settings saved", "path", u.cfgPath)
+	}
+	return nil
 }

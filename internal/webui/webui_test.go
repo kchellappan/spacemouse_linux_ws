@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +17,7 @@ import (
 func newHandler(t *testing.T) (*Handler, *logbuf.Buffer) {
 	t.Helper()
 	logs := logbuf.New(50)
-	return New(func() Snapshot { return Snapshot{Version: "test", Listen: "127.51.68.120:8181"} }, logs, nil), logs
+	return New(func() Snapshot { return Snapshot{Version: "test", Listen: "127.51.68.120:8181"} }, logs, nil, nil), logs
 }
 
 func TestStatusReturnsTheSnapshot(t *testing.T) {
@@ -131,7 +132,7 @@ func TestIndexIsNotServedForUnknownPaths(t *testing.T) {
 
 func handlerWithScene(t *testing.T, scenes SceneFactory) *Handler {
 	t.Helper()
-	return New(func() Snapshot { return Snapshot{Version: "test"} }, logbuf.New(10), scenes)
+	return New(func() Snapshot { return Snapshot{Version: "test"} }, logbuf.New(10), scenes, nil)
 }
 
 func TestSceneStreamsFrames(t *testing.T) {
@@ -228,3 +229,112 @@ func TestTestPageIsServed(t *testing.T) {
 		t.Error("the page does not look like the self test")
 	}
 }
+
+func settingsHandler(t *testing.T, write SettingsWriter) *Handler {
+	t.Helper()
+	return New(func() Snapshot { return Snapshot{Version: "test"} }, logbuf.New(10), nil, write)
+}
+
+func putSettings(t *testing.T, h *Handler, contentType, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// This is the control that actually stops a cross-origin write. CORS decides
+// whether a page may read a response, not whether the request is delivered:
+// a cross-origin POST with a simple content type still executes. Requiring
+// application/json makes the request non-simple, so the browser must
+// preflight, and nothing answers a preflight.
+func TestSettingsRequiresJSONContentType(t *testing.T) {
+	var called bool
+	h := settingsHandler(t, func([]byte, bool) error { called = true; return nil })
+
+	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"} {
+		rec := putSettings(t, h, ct, `{"panSpeed":2}`)
+		if rec.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("Content-Type %q returned %d, want 415", ct, rec.Code)
+		}
+	}
+	if called {
+		t.Error("a request with a simple content type reached the writer")
+	}
+}
+
+func TestSettingsAcceptsJSON(t *testing.T) {
+	var got string
+	var persisted bool
+	h := settingsHandler(t, func(b []byte, p bool) error {
+		got, persisted = string(b), p
+		return nil
+	})
+
+	rec := putSettings(t, h, "application/json; charset=utf-8", `{"panSpeed":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got != `{"panSpeed":2}` {
+		t.Errorf("writer received %q", got)
+	}
+	if persisted {
+		t.Error("a request without ?persist=1 was saved to disk")
+	}
+}
+
+func TestSettingsPersistFlag(t *testing.T) {
+	var persisted bool
+	h := settingsHandler(t, func(_ []byte, p bool) error { persisted = p; return nil })
+
+	req := httptest.NewRequest(http.MethodPut, "/api/settings?persist=1", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !persisted {
+		t.Error("?persist=1 did not reach the writer")
+	}
+}
+
+// The message goes on screen, so it has to say what is wrong with the value.
+func TestSettingsReturnsTheValidationMessage(t *testing.T) {
+	h := settingsHandler(t, func([]byte, bool) error {
+		return errBadDeadzone
+	})
+	rec := putSettings(t, h, "application/json", `{"deadzone":1.5}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "deadzone") {
+		t.Errorf("body = %q, want it to name the offending field", rec.Body.String())
+	}
+}
+
+func TestSettingsRejectsOtherMethods(t *testing.T) {
+	h := settingsHandler(t, func([]byte, bool) error { return nil })
+
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/settings", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s returned %d, want 405", method, rec.Code)
+		}
+	}
+}
+
+func TestSettingsUnavailableWithoutAWriter(t *testing.T) {
+	h := settingsHandler(t, nil)
+	rec := putSettings(t, h, "application/json", `{}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+var errBadDeadzone = errors.New("deadzone must be at least 0 and below 1, not 1.5")

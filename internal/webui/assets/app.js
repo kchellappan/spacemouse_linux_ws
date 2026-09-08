@@ -3,6 +3,8 @@
 // violation on an origin that CAD sites already talk to.
 "use strict";
 
+import { onSettings } from "/assets/tuning.js";
+
 const $ = (id) => document.getElementById(id);
 const AXES = [
   ["x", "x", false], ["y", "y", false], ["z", "z", false],
@@ -155,6 +157,7 @@ function renderStatus(s) {
 
   renderProfiles(s.profiles);
   renderClients(s.clients);
+  onSettings(s.settings);
 }
 
 function appendLogs(records) {

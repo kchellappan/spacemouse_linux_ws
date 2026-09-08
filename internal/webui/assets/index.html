@@ -47,6 +47,20 @@
     </section>
 
     <section class="card" style="grid-column: 1 / -1">
+      <h2>tuning</h2>
+      <p class="meta" id="tune-help">
+        Changes apply immediately, so you can feel them with the puck in your
+        hand. Nothing is written to disk until you save.
+      </p>
+      <div class="tuning" id="tuning"></div>
+      <div class="tune-actions">
+        <button id="save" type="button">Save</button>
+        <button id="revert" type="button" class="ghost">Revert</button>
+        <span class="meta" id="tune-status"></span>
+      </div>
+    </section>
+
+    <section class="card" style="grid-column: 1 / -1">
       <h2>connected pages</h2>
       <table>
         <thead><tr>
@@ -61,6 +75,6 @@
   <div id="log"></div>
 </main>
 
-<script src="/assets/app.js"></script>
+<script type="module" src="/assets/app.js"></script>
 </body>
 </html>

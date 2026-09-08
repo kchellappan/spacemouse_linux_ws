@@ -20,7 +20,7 @@ func uiServer(t *testing.T) *httptest.Server {
 		Log:            quietLogger(),
 		NLProxyVersion: "1.4.8.21486",
 		Clients:        server.NewClients(),
-		UI:             webui.New(func() webui.Snapshot { return webui.Snapshot{Version: "test"} }, logs, nil),
+		UI:             webui.New(func() webui.Snapshot { return webui.Snapshot{Version: "test"} }, logs, nil, nil),
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
@@ -180,5 +180,43 @@ func TestPlaceholderServedWithoutAUI(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "Discovery endpoint") {
 		t.Error("the placeholder page is missing when no UI is configured")
+	}
+}
+
+// The same-origin guard has to cover writes, not just reads. This is the
+// second of the three rules; the content-type requirement is enforced in the
+// UI handler and tested there.
+func TestSettingsWriteRejectsAForeignOrigin(t *testing.T) {
+	logs := logbuf.New(10)
+	var called bool
+	h := server.New(server.Options{
+		Log: quietLogger(),
+		UI: webui.New(
+			func() webui.Snapshot { return webui.Snapshot{} }, logs, nil,
+			func([]byte, bool) error { called = true; return nil },
+		),
+	})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings",
+		strings.NewReader(`{"panSpeed":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://evil.example")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-origin write returned %d, want 403", resp.StatusCode)
+	}
+	if called {
+		t.Error("a cross-origin write reached the settings writer")
 	}
 }

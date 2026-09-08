@@ -54,7 +54,15 @@ const extentsTTL = 2 * time.Second
 // DriveOptions configures the live navigation loop.
 type DriveOptions struct {
 	Device *spacenav.Client
-	Config nav.Config
+	// Config returns the tuning in force. It is read every frame rather than
+	// captured once, so an edit in the web UI changes the feel while the puck
+	// is still in the user's hand.
+	Config func() nav.Config
+
+	// SetConfig records a change the loop itself made — a button toggling
+	// dominant-axis filtering, say — so the UI and the device do not end up
+	// disagreeing about what is switched on.
+	SetConfig func(nav.Config)
 	// FrameRate is how often the camera is updated when we are driving the
 	// clock. The device streams at ~125 Hz, far above display rate, so we
 	// sample its latched state on our own timer instead of reacting per
@@ -67,7 +75,7 @@ type DriveOptions struct {
 	// Buttons maps device button ids to actions. Ids vary by model, so
 	// unmapped presses are logged rather than ignored silently.
 	// On a SpaceMouse Compact: 0 is the left button, 1 the right.
-	Buttons map[int]ButtonAction
+	Buttons func() map[int]ButtonAction
 }
 
 // ButtonAction is what a device button does.
@@ -113,8 +121,7 @@ func runDrive(ctx context.Context, log *slog.Logger, o DriveOptions, c *navlib.C
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 
-	// A local copy: buttons can toggle settings at runtime.
-	cfg := o.Config
+	cfg := o.Config()
 
 	log.Info("navigation active",
 		"client", c.Info.Name,
@@ -179,6 +186,11 @@ func runDrive(ctx context.Context, log *slog.Logger, o DriveOptions, c *navlib.C
 		now := time.Now()
 		last = now
 
+		// Re-read before the buttons get a look, so a UI edit and a button
+		// toggle in the same frame compose rather than one clobbering the
+		// other: the edit lands first, the toggle applies on top of it and
+		// is written straight back.
+		cfg = o.Config()
 		handleButtons(ctx, log, o, c, &cfg)
 
 		// The page tells us when its canvas has focus; respect it or we fight
@@ -296,7 +308,10 @@ func handleButtons(ctx context.Context, log *slog.Logger, o DriveOptions, c *nav
 			if ev.Button == nil {
 				continue
 			}
-			applyButton(ctx, log, c, cfg, o.Buttons[int(ev.Button.ID)], *ev.Button)
+			applyButton(ctx, log, c, cfg, o.Buttons()[int(ev.Button.ID)], *ev.Button)
+			if o.SetConfig != nil {
+				o.SetConfig(*cfg)
+			}
 		default:
 			return
 		}

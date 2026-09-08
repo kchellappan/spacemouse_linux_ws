@@ -10,8 +10,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/logbuf"
@@ -112,23 +114,33 @@ type SceneStepper func(dt time.Duration) SceneFrame
 // the whole reset mechanism, and needs no mutating endpoint to provide.
 type SceneFactory func() SceneStepper
 
+// SettingsWriter applies a settings change, and optionally persists it.
+//
+// Live apply and saving are separate so a user can feel a slider with the
+// puck in their hand and still walk away without having changed anything on
+// disk. Returning an error rejects the whole update: applying the valid half
+// would leave the device in a state nobody asked for and the page could not
+// show.
+type SettingsWriter func(body []byte, persist bool) error
+
 // Source provides the current state. Implemented by main, which is the only
 // place that can see the device, the settings and the certificates at once.
 type Source func() Snapshot
 
 // Handler serves the page, its assets, and the API beneath it.
 type Handler struct {
-	mux    *http.ServeMux
-	source Source
-	logs   *logbuf.Buffer
-	scenes SceneFactory
+	mux      *http.ServeMux
+	source   Source
+	logs     *logbuf.Buffer
+	scenes   SceneFactory
+	settings SettingsWriter
 }
 
 // New returns a handler serving the status UI. scenes may be nil, in which
 // case the test scene reports that it is unavailable rather than 404ing,
 // which is a clearer answer for a page that is already open.
-func New(source Source, logs *logbuf.Buffer, scenes SceneFactory) *Handler {
-	h := &Handler{mux: http.NewServeMux(), source: source, logs: logs, scenes: scenes}
+func New(source Source, logs *logbuf.Buffer, scenes SceneFactory, settings SettingsWriter) *Handler {
+	h := &Handler{mux: http.NewServeMux(), source: source, logs: logs, scenes: scenes, settings: settings}
 
 	sub, err := fs.Sub(assets, "assets")
 	if err != nil {
@@ -138,6 +150,7 @@ func New(source Source, logs *logbuf.Buffer, scenes SceneFactory) *Handler {
 
 	h.mux.Handle("/assets/", http.StripPrefix("/assets/", files))
 	h.mux.HandleFunc("/api/status", h.status)
+	h.mux.HandleFunc("/api/settings", h.settingsHandler)
 	h.mux.HandleFunc("/api/logs", h.logsHandler)
 	h.mux.HandleFunc("/api/events", h.events)
 	h.mux.HandleFunc("/api/scene", h.scene)
@@ -170,6 +183,48 @@ func (h *Handler) page(w http.ResponseWriter, name string) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(page)
 }
+
+// settingsHandler applies a settings change.
+//
+// The Content-Type check is not politeness, it is the security control. CORS
+// governs whether a page may read a response, not whether the request is
+// delivered: a cross-origin POST with a simple content type still executes.
+// Requiring application/json makes the request non-simple, so the browser
+// must preflight, and nothing here answers a preflight. Combined with the
+// same-origin check the server applies to everything under /api, that is
+// what keeps another site out. See docs/10-configuration.md.
+func (h *Handler) settingsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		w.Header().Set("Allow", "PUT")
+		http.Error(w, "use PUT", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.settings == nil {
+		http.Error(w, "settings are read-only in this mode", http.StatusServiceUnavailable)
+		return
+	}
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSettingsBody))
+	if err != nil {
+		http.Error(w, "could not read the request", http.StatusBadRequest)
+		return
+	}
+	if err := h.settings(body, r.URL.Query().Get("persist") == "1"); err != nil {
+		// The message is shown to the user, so it says what is wrong with
+		// the value rather than that something was wrong.
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, h.source())
+}
+
+// maxSettingsBody bounds a request that is a couple of hundred bytes in
+// practice.
+const maxSettingsBody = 64 << 10
 
 func (h *Handler) testPage(w http.ResponseWriter, r *http.Request) {
 	h.page(w, "assets/test.html")
