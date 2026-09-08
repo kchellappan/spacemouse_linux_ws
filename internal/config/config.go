@@ -66,9 +66,10 @@ type Config struct {
 	Buttons map[string]string `json:"buttons"`
 }
 
-// Default returns the built-in settings. FullScale is a typical SpaceMouse
-// Compact reading, not a measurement of the user's device — -calibrate
-// replaces it.
+// Default returns the built-in settings. The full-scale values come from the
+// HID logical maximum every 3Dconnexion axis declares, times spacenavd's
+// default sensitivity of 1.0 — correct on a machine with no spnavrc tuning
+// rather than a stand-in. See nav.DefaultConfig and docs/05-spacenavd.md.
 func Default() Config {
 	n := nav.DefaultConfig()
 	return Config{

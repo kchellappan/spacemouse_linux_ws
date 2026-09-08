@@ -57,7 +57,7 @@ func main() {
 		showConfig = flag.Bool("show-config", false, "print the effective settings as JSON and exit")
 
 		navMode     = flag.String("nav-mode", "object", "object: the model follows the cap; camera: the camera does")
-		fullScale   = flag.Float64("full-scale", 350, "device units at full deflection, from -calibrate")
+		fullScale   = flag.Float64("full-scale", 350, "device units at full deflection; 350 unless spnavrc changes sensitivity")
 		deadzone    = flag.Float64("deadzone", 0.06, "fraction of full scale to ignore")
 		exponent    = flag.Float64("curve", 1.6, "response curve; 1 is linear, higher gives finer control near centre")
 		transSpeed  = flag.Float64("pan-speed", 0.9, "model diagonals per second at full deflection")

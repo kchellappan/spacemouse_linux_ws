@@ -74,8 +74,19 @@ type Config struct {
 	EnableRotation    bool
 }
 
-// DefaultConfig is a starting point, not a tuned one. FullScale should come
-// from calibration; 350 is a typical SpaceMouse Compact reading.
+// DefaultConfig is a starting point. The speeds and the curve are taste and
+// want tuning; the full-scale values are not a guess.
+//
+// 350 is the HID logical maximum a 3Dconnexion device declares for all six
+// axes at once, and spacenavd multiplies by sensitivity without clamping
+// (src/event.c), so the output range is 350 x sensitivity. Sensitivity
+// defaults to 1.0, so a machine with no /etc/spnavrc — the usual case —
+// saturates at exactly 350. Confirmed empirically: every axis of a SpaceMouse
+// Compact pinned at 350 in both directions. See docs/05-spacenavd.md.
+//
+// Calibration is therefore for machines whose spnavrc tunes sensitivity, not
+// for making a stock device work. It stays worth running because it also
+// measures the noise floor and confirms the axis map.
 func DefaultConfig() Config {
 	return Config{
 		Mode:              ModeObject,

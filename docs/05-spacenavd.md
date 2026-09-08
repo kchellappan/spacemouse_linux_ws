@@ -286,6 +286,36 @@ limit: 650 of 7056 axis readings (9.2%) sit at exactly 350 — the second most
 common value after zero — while the next magnitudes down (349, 348, 346, 341)
 are far rarer. That is a clipping plateau, not a distribution.
 
+**Where 350 comes from.** Not spacenavd, and not the spring. It is the value
+the device's own HID report descriptor declares, once, covering all six axes:
+
+```
+0x16, 0xA2, 0xFE,   //  Logical Minimum (-350)
+0x26, 0x5E, 0x01,   //  Logical Maximum (350)
+```
+
+spacenavd then applies sensitivity as a bare multiply with no clamp
+(`src/event.c`):
+
+```c
+inp->val = (int)((float)inp->val * cfg.sensitivity * axis_sens);
+```
+
+so:
+
+```
+full scale = 350 x cfg.sensitivity x per-half or per-axis sensitivity
+```
+
+`sensitivity` defaults to 1.0 and the measured machine has no `/etc/spnavrc`,
+which is why it saturates at exactly 350. The measurement and the descriptor
+close on each other.
+
+Sources: the HID descriptor is parsed in the [udev-hid-bpf SpaceNavigator case
+study](https://udev-hid-bpf-bentiss-648236040b7c508ff54e7bc3510428536d7fd37b91.pages.freedesktop.org/case-study-spacenavigator.html);
+the multiply is
+[`spacenavd/src/event.c`](https://github.com/FreeSpacenav/spacenavd/blob/master/src/event.c).
+
 **Consequences.**
 
 - Any calibration reading below 350 on this device is under-pushing, not a
@@ -296,6 +326,14 @@ are far rarer. That is a clipping plateau, not a distribution.
   which it got (doc 10).
 - 350 is not universal. `spnavrc` exposes `sensitivity`,
   `sensitivity-translation` and `sensitivity-rotation` as independent knobs,
-  plus per-axis variants, so a tuned machine can clamp at different values for
-  sliding and tipping. That is why full scale is measured rather than assumed,
-  and why translation and rotation carry separate scales.
+  plus per-axis variants, so a tuned machine can saturate at different values
+  for sliding and tipping. That is why full scale is measured rather than
+  assumed, and why translation and rotation carry separate scales.
+- **No static number is guaranteed to stay right.** `spnavcfg` changes
+  sensitivity by talking to the daemon rather than editing the file, and
+  `bnactN = sensitivity-up` / `sensitivity-down` puts it on a button. Reading
+  `spnavrc` would therefore be an improvement on assuming 1.0, but not a
+  guarantee. Showing live axis magnitudes, so a user can see saturation
+  directly, is the durable answer — a job for the status UI.
+- Shipping a measured calibration in the package would be ceremony: it would
+  record 350, which is what the built-in default already is.
