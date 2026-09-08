@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/config"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/logbuf"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/server"
 	"github.com/kchellappan/spacemouse_linux_ws/internal/spacenav"
+	"github.com/kchellappan/spacemouse_linux_ws/internal/webui"
 )
 
 var version = "dev"
@@ -80,7 +82,12 @@ func main() {
 	if *debug {
 		level = slog.LevelDebug
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	// Every record also lands in a ring buffer the status page reads. A user
+	// diagnosing a broken setup is usually in a browser, and under a snap or
+	// flatpak browser may not be able to reach journalctl at all.
+	logs := logbuf.New(500)
+	log := slog.New(logbuf.NewHandler(
+		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}), logs))
 
 	cfgPath := *configPath
 	if cfgPath == "" {
@@ -180,9 +187,21 @@ func main() {
 		}
 	}
 
+	ui := &uiState{
+		version:   version,
+		startedAt: time.Now(),
+		listen:    net.JoinHostPort(*host, fmt.Sprint(*port)),
+		settings:  settings,
+		paths:     paths,
+		clients:   server.NewClients(),
+		trust:     newTrustCache(paths, log),
+	}
+
 	opts := server.Options{
 		Log:         log,
 		ServerIdent: "spacemouse-bridge " + version,
+		Clients:     ui.clients,
+		UI:          webui.New(ui.snapshot, logs),
 	}
 	// deviceDead is nil outside drive mode, and a nil channel blocks forever
 	// in a select, which is exactly the behaviour we want there.
@@ -201,6 +220,7 @@ func main() {
 		}
 		defer dev.Close()
 		device, deviceDead = dev, dev.Dead()
+		ui.device = dev
 
 		btns, err := server.ParseButtons(settings.ButtonSpec())
 		if err != nil {

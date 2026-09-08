@@ -11,6 +11,8 @@ internal/server/         HTTP/WS wiring, discovery endpoint, probe + orbit
 internal/spacenav/       spacenavd client, axis calibration
 internal/nav/            navigation model: deflection -> camera motion
 internal/config/         persisted settings, flag precedence (doc 10)
+internal/logbuf/         in-memory ring of recent log records
+internal/webui/          status page, embedded assets, SSE stream
 internal/certs/          CA and leaf generation, NSS trust injection
 packaging/               systemd user unit, deb maintainer scripts, nfpm
 scripts/                 build and run helpers
@@ -23,6 +25,33 @@ identity and location are the same string. The Go tree sits at the root
 rather than under `src/` so that release tags can be plain `v0.1.0`; a module
 in a subdirectory requires tags prefixed with that subdirectory, which would
 collide with the tags carrying the `.deb`.
+
+## The status UI
+
+Served at `https://127.51.68.120:8181/`, replacing the three-line placeholder.
+Assets are embedded with `embed.FS`, so the single static binary survives and
+there is no CDN to fail offline or trip the page's own CSP.
+
+**Server-sent events, not a WebSocket.** The traffic is one-way, the browser
+reconnects by itself, and the WAMP endpoint already owns the only WebSocket on
+this origin — two socket protocols on one server is a debugging trap. The
+stream sends `status` on a 100 ms tick and `logs` on write. 125 Hz device
+updates are deliberately not forwarded: ten frames a second is enough to watch
+a puck move and cheap enough to leave open all day.
+
+**Log records are teed into a ring buffer** (`internal/logbuf`) as well as
+stderr. A user diagnosing a broken setup is usually in a browser, and under a
+snap or flatpak browser may not be able to reach `journalctl` at all. Writes
+never block: the buffer is on the path of the WAMP read loop and the drive
+loop, and a status page must not be able to stall navigation. Subscribers get
+a coalescing one-slot channel, so a slow reader misses wake-ups but never
+records — it re-reads with `Since`.
+
+**`/api` is same-origin only and carries no CORS headers**, even though it is
+read-only, because the log discloses which sites connected. See doc 10.
+
+**The certutil sweep is cached for 10 seconds.** Checking trust forks a process
+per browser profile, and the page polls ten times a second.
 
 ## Design decisions worth knowing
 

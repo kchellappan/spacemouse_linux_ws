@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spacemouse-bridge</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header>
+  <h1>spacemouse-bridge</h1>
+  <span class="meta" id="version"></span>
+  <span class="meta" id="uptime"></span>
+  <span class="live" id="live">connecting <b>&bull;</b></span>
+</header>
+
+<main>
+  <div class="grid">
+    <section class="card">
+      <h2>spacenavd</h2>
+      <dl>
+        <dt>status</dt><dd id="spnav-status"></dd>
+        <dt>socket</dt><dd id="spnav-socket">&mdash;</dd>
+        <dt>dropped</dt><dd id="spnav-dropped">0</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>device</h2>
+      <div class="axes" id="axes"></div>
+    </section>
+
+    <section class="card">
+      <h2>certificates</h2>
+      <dl>
+        <dt>state</dt><dd id="cert-state"></dd>
+        <dt>CA until</dt><dd id="cert-ca">&mdash;</dd>
+        <dt>leaf until</dt><dd id="cert-leaf">&mdash;</dd>
+        <dt>certutil</dt><dd id="cert-certutil">&mdash;</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>browser profiles</h2>
+      <table><tbody id="profiles"></tbody></table>
+    </section>
+
+    <section class="card" style="grid-column: 1 / -1">
+      <h2>connected pages</h2>
+      <table>
+        <thead><tr>
+          <th>origin</th><th>client</th><th>library</th>
+          <th>matrix</th><th>frame timing</th><th>since</th>
+        </tr></thead>
+        <tbody id="clients"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <div id="log"></div>
+</main>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>

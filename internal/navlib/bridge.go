@@ -34,6 +34,11 @@ type Bridge struct {
 	// animation loop if we take longer than 60ms.
 	OnFrameTime func(ctx context.Context, c *Controller, t float64)
 
+	// OnClientInfo reports what the create 3dcontroller handshake said, for
+	// anything that wants to display it. Runs on the read loop, so it must
+	// not block.
+	OnClientInfo func(info ClientInfo, q Quirks)
+
 	mu          sync.Mutex
 	connexionID string
 	instanceID  string
@@ -129,6 +134,9 @@ func (b *Bridge) handleCreate(args []json.RawMessage) (any, error) {
 		if info.RowMajorOrder == nil && info.Version < 0.5 {
 			b.log.Warn("client predates 3DconnexionJS 0.5; assuming row-major matrices",
 				"client", info.Name)
+		}
+		if b.OnClientInfo != nil {
+			b.OnClientInfo(info, q)
 		}
 		return map[string]string{"instance": id}, nil
 	}
