@@ -115,7 +115,11 @@ func New(o Options) http.Handler {
 			serveWAMP(w, r, &upgrader, &o)
 			return
 		}
-		if o.UI != nil && r.URL.Path == "/" {
+		// Everything else that is not a WebSocket belongs to the UI, which
+		// owns its own routing and 404s. Matching only "/" here meant a page
+		// the UI added — /test — fell through to the placeholder below, and
+		// looked to the user like the new build had not been installed.
+		if o.UI != nil {
 			o.UI.ServeHTTP(w, r)
 			return
 		}

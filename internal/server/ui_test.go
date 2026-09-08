@@ -140,3 +140,45 @@ func TestWAMPUpgradeSurvivesTheUI(t *testing.T) {
 		t.Errorf("upgrade returned %d, want 101 — the UI is shadowing the WAMP endpoint", resp.StatusCode)
 	}
 }
+
+// Regression: /test was registered on the UI's own mux and tested there, but
+// the server's outer mux only routed "/" to the UI, so the page fell through
+// to the placeholder. Testing the two halves separately missed the seam
+// between them, so this goes through server.New rather than the UI handler.
+func TestUIPagesBeyondTheRootAreReachable(t *testing.T) {
+	srv := uiServer(t)
+
+	for _, path := range []string{"/", "/test"} {
+		resp := get(t, srv.URL+path, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s returned %d", path, resp.StatusCode)
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if strings.Contains(string(body), "Discovery endpoint") {
+			t.Errorf("GET %s served the placeholder page, not the UI", path)
+		}
+	}
+}
+
+// A path the UI does not know must still 404 rather than silently rendering
+// the placeholder, which reads as "the page exists but is broken".
+func TestUnknownUIPathIsNotFound(t *testing.T) {
+	srv := uiServer(t)
+	resp := get(t, srv.URL+"/no-such-page", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown path returned %d, want 404", resp.StatusCode)
+	}
+}
+
+// With no UI configured the placeholder is still the right answer.
+func TestPlaceholderServedWithoutAUI(t *testing.T) {
+	srv := httptest.NewServer(server.New(server.Options{Log: quietLogger()}))
+	t.Cleanup(srv.Close)
+
+	resp := get(t, srv.URL+"/", "")
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "Discovery endpoint") {
+		t.Error("the placeholder page is missing when no UI is configured")
+	}
+}
