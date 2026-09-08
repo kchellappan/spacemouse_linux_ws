@@ -76,6 +76,8 @@ type Event struct {
 type Client struct {
 	conn net.Conn
 	log  *slog.Logger
+	// socket records which of the candidate paths answered, for diagnostics.
+	socket string
 
 	events chan Event
 
@@ -120,6 +122,7 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 		c := &Client{
 			conn:   conn,
 			log:    log,
+			socket: p,
 			events: make(chan Event, 128),
 			done:   make(chan struct{}),
 			dead:   make(chan struct{}),
@@ -134,6 +137,9 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 	}
 	return nil, fmt.Errorf("connecting to spacenavd: %w", lastErr)
 }
+
+// Socket reports the path this client connected on.
+func (c *Client) Socket() string { return c.socket }
 
 // Dead is closed when the connection to spacenavd ends, whether because Close
 // was called or because the daemon went away. Err distinguishes the two.

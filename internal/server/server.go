@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/gorilla/websocket"
@@ -48,6 +49,14 @@ type Options struct {
 	// frame time. Must return fast — the 0.8.1 sample abandons its animation
 	// loop after 60ms without a response.
 	OnFrameTime func(ctx context.Context, c *navlib.Controller, t float64)
+
+	// Clients, when set, records connected pages so the status UI can list
+	// them. Nil disables tracking entirely rather than tracking into a void.
+	Clients *Clients
+
+	// UI, when set, is mounted in place of the built-in status page and owns
+	// everything under /api.
+	UI http.Handler
 }
 
 func (o *Options) defaults() {
@@ -90,14 +99,29 @@ func New(o Options) http.Handler {
 		})
 	})
 
+	// The UI and its API are same-origin only. setCORS deliberately does not
+	// run here: the discovery endpoint needs a permissive Origin, and these
+	// do not. The log discloses which sites connected to this bridge, so a
+	// read endpoint leaks browsing activity if any page can fetch it.
+	// See docs/10-configuration.md.
+	if o.UI != nil {
+		mux.Handle("/api/", sameOriginOnly(o.UI))
+		mux.Handle("/assets/", o.UI)
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w, r)
-		if r.Header.Get("Upgrade") == "" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprint(w, statusPage)
+		if r.Header.Get("Upgrade") != "" {
+			setCORS(w, r)
+			serveWAMP(w, r, &upgrader, &o)
 			return
 		}
-		serveWAMP(w, r, &upgrader, &o)
+		if o.UI != nil && r.URL.Path == "/" {
+			o.UI.ServeHTTP(w, r)
+			return
+		}
+		setCORS(w, r)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, statusPage)
 	})
 
 	return mux
@@ -113,10 +137,21 @@ func serveWAMP(w http.ResponseWriter, r *http.Request, up *websocket.Upgrader, o
 
 	o.Log.Info("client connected", "origin", originOf(r), "subprotocol", conn.Subprotocol())
 
+	var id string
+	if o.Clients != nil {
+		id = o.Clients.Add(originOf(r))
+		defer o.Clients.Remove(id)
+	}
+
 	sess := wamp.NewSession(conn, o.Log)
 	bridge := navlib.NewBridge(o.Log)
 	bridge.OnReady = o.OnReady
 	bridge.OnFrameTime = o.OnFrameTime
+	if o.Clients != nil {
+		bridge.OnClientInfo = func(info navlib.ClientInfo, q navlib.Quirks) {
+			o.Clients.Describe(id, info, q.Layout, q.FrameTiming)
+		}
+	}
 
 	if err := sess.Welcome(o.ServerIdent); err != nil {
 		o.Log.Error("failed to send WELCOME", "err", err)
@@ -127,6 +162,31 @@ func serveWAMP(w http.ResponseWriter, r *http.Request, up *websocket.Upgrader, o
 		return
 	}
 	o.Log.Info("client disconnected")
+}
+
+// sameOriginOnly rejects requests carrying a foreign Origin.
+//
+// Browsers attach Origin to cross-origin requests and page JavaScript cannot
+// forge it, so this is the check that actually keeps another site out. Absent
+// Origin means a direct navigation or a non-browser client such as curl, which
+// is allowed: it carries no ambient authority to abuse.
+func sameOriginOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" && !isOwnOrigin(origin, r.Host) {
+			http.Error(w, "cross-origin requests are not accepted here", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isOwnOrigin reports whether origin names this server.
+func isOwnOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" && u.Host == host
 }
 
 func setCORS(w http.ResponseWriter, r *http.Request) {

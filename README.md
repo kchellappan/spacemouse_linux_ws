@@ -98,6 +98,14 @@ device, which on ours cost about a third of the usable range. `-show-config`
 prints the effective settings; see
 [docs/10-configuration.md](docs/10-configuration.md) for what each one does.
 
+### The status page
+
+Open **https://127.51.68.120:8181/** while the service is running. It shows
+whether spacenavd and the device are connected, live per-axis deflection,
+which pages are connected and what client library they run, certificate and
+per-profile browser trust, and a live log — useful when the browser is the
+thing that is broken and `journalctl` is out of reach.
+
 ### When something is wrong
 
 ```sh

@@ -170,12 +170,17 @@ provisional push rather than saving a zero, which would leave that half numb.
 still the built-in value, because an unmeasured full scale costs sensitivity
 silently and nothing else would ever mention it.
 
-## When the web UI arrives: the API rules
+## The API rules
 
-The UI will be served from the origin that already exists — the bridge's own
-`https://127.51.68.120:8181` — and CAD sites already talk to that origin. Any
-endpoint that *changes* settings therefore needs all three of these, decided
-here so the UI does not have to rediscover it:
+The UI is served from the origin that already exists — the bridge's own
+`https://127.51.68.120:8181` — and CAD sites already talk to that origin.
+
+Rules 1 and 3 below are **already in force**, because they turned out to be
+needed sooner than expected: the log records which sites connected, so even a
+read-only endpoint discloses browsing activity. `/api` is mounted behind a
+same-origin check and carries no CORS headers, with tests pinning both.
+
+Rule 2 applies when the first mutating endpoint lands:
 
 1. **No CORS headers on `/api`.** `setCORS` currently echoes whatever `Origin`
    it is given, which is required for the discovery endpoint and wrong for
