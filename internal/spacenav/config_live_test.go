@@ -1,8 +1,10 @@
 package spacenav
 
 import (
+	"errors"
 	"os"
 	"testing"
+	"time"
 )
 
 // dialReal connects to a spacenavd actually running on this machine, and
@@ -120,5 +122,53 @@ func TestLiveWriteConfigIsANoOpWhenNothingChanges(t *testing.T) {
 			t.Errorf("axis %d dead zone changed: %v -> %v",
 				i, before.Deadzone[i], after.Deadzone[i])
 		}
+	}
+}
+
+// A daemon that predates negotiation says nothing and may already be
+// streaming. Consuming four bytes of an event frame would misalign every
+// frame after it, silently and permanently, so negotiation peeks.
+func TestNegotiationLeavesEventBytesAloneWhenUnsupported(t *testing.T) {
+	// fakeDaemon never answers a negotiation request; it just sends frames.
+	c, err := Dial(fakeDaemon(t, [][8]int32{
+		{evMotion, 1, 2, 3, 4, 5, 6, 7},
+	}), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if c.ConfigSupported() {
+		t.Error("a daemon that never replied was treated as supporting configuration")
+	}
+
+	select {
+	case ev := <-c.Events():
+		if ev.Motion == nil {
+			t.Fatalf("first frame decoded as %+v, want motion — negotiation ate part of it", ev)
+		}
+		// Wire order is (x, z, y): the frame above must survive intact.
+		if ev.Motion.X != 1 || ev.Motion.Z != 2 || ev.Motion.Y != 3 {
+			t.Errorf("frame corrupted by negotiation: %+v", *ev.Motion)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no event arrived; the stream is misaligned")
+	}
+}
+
+// Configuration calls must refuse cleanly rather than hang when the daemon is
+// too old, since the request would never be answered.
+func TestConfigRefusedWithoutProtocolSupport(t *testing.T) {
+	c, err := Dial(fakeDaemon(t, nil), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if _, err := c.ReadConfig(); !errors.Is(err, ErrConfigUnsupported) {
+		t.Errorf("ReadConfig returned %v, want ErrConfigUnsupported", err)
+	}
+	if err := c.SaveConfig(); !errors.Is(err, ErrConfigUnsupported) {
+		t.Errorf("SaveConfig returned %v, want ErrConfigUnsupported", err)
 	}
 }

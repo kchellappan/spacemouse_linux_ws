@@ -8,6 +8,7 @@
 package spacenav
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -75,7 +76,10 @@ type Event struct {
 // Client is a connection to spacenavd.
 type Client struct {
 	conn net.Conn
-	log  *slog.Logger
+	// reader buffers conn so protocol negotiation can inspect the first
+	// bytes without consuming them when they turn out to be a device event.
+	reader *bufio.Reader
+	log    *slog.Logger
 	// socket records which of the candidate paths answered, for diagnostics.
 	socket string
 
@@ -142,6 +146,7 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 		log.Info("connected to spacenavd", "socket", p)
 		c := &Client{
 			conn:      conn,
+			reader:    bufio.NewReaderSize(conn, 4096),
 			log:       log,
 			socket:    p,
 			events:    make(chan Event, 128),
@@ -149,9 +154,11 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 			done:      make(chan struct{}),
 			dead:      make(chan struct{}),
 		}
-		// Negotiate before the read loop starts: the reply is a bare int32
-		// rather than a frame, so it must not reach the frame reader.
-		c.proto = negotiate(conn, log)
+		// Negotiate before the read loop starts. The reply is a bare int32
+		// rather than a frame, so it must not reach the frame reader — and
+		// an older daemon does not reply at all, so this peeks rather than
+		// reads and leaves anything it does not recognise alone.
+		c.proto = negotiate(conn, c.reader, log)
 		go c.readLoop()
 		return c, nil
 	}
@@ -169,7 +176,7 @@ func Dial(path string, log *slog.Logger) (*Client, error) {
 // daemon too old to understand it simply says nothing, so a short timeout is
 // the detection mechanism, and the result is protocol 0: events work,
 // configuration does not.
-func negotiate(conn net.Conn, log *slog.Logger) int {
+func negotiate(conn net.Conn, r *bufio.Reader, log *slog.Logger) int {
 	req := uint32(reqTag | reqChangeProto | maxProtoVer)
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], req)
@@ -188,13 +195,24 @@ func negotiate(conn net.Conn, log *slog.Logger) int {
 	}
 	defer conn.SetReadDeadline(time.Time{})
 
-	if _, err := io.ReadFull(conn, buf[:]); err != nil {
+	// Peek, do not read. A daemon that predates negotiation says nothing and
+	// may already be streaming events, and consuming four bytes of an event
+	// frame would misalign every frame after it — silently, and forever.
+	head, err := r.Peek(4)
+	if err != nil {
 		log.Debug("no protocol reply; assuming an older spacenavd", "err", err)
 		return 0
 	}
-	v := int(binary.LittleEndian.Uint32(buf[:]) & 0xff)
-	log.Debug("negotiated spacenavd protocol", "version", v)
-	return v
+	v := binary.LittleEndian.Uint32(head)
+	if v&0xffff0000 != uint32(reqTag) {
+		log.Debug("first bytes are not a protocol reply; assuming an older spacenavd")
+		return 0
+	}
+	_, _ = r.Discard(4)
+
+	ver := int(v & 0xff)
+	log.Debug("negotiated spacenavd protocol", "version", ver)
+	return ver
 }
 
 // negotiateTimeout matches libspnav's: long enough for a local socket, short
@@ -262,7 +280,7 @@ func (c *Client) readLoop() {
 		default:
 		}
 
-		if _, err := io.ReadFull(c.conn, buf); err != nil {
+		if _, err := io.ReadFull(c.reader, buf); err != nil {
 			select {
 			case <-c.done: // expected: Close was called
 				c.markDead(nil)
