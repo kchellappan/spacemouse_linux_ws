@@ -339,3 +339,115 @@ the multiply is
   directly, is the durable answer — a job for the status UI.
 - Shipping a measured calibration in the package would be ceremony: it would
   record 350, which is what the built-in default already is.
+
+## Two layers of tuning, and which owns what
+
+Settings live in two places, and confusing them is the likeliest support
+question once colleagues start using `spnavcfg`.
+
+```
+device ──► spacenavd ──┬──► FreeCAD, Blender, Meshlab (libspnav)   ← spnavrc only
+                       │
+                       └──► spacemouse-bridge ──► WAMP ──► Onshape ← spnavrc, then ours
+```
+
+Everything the bridge's web UI changes lives in `internal/nav` and runs
+*after* events are read from the daemon, so it affects browser CAD only.
+Native libspnav clients never see it.
+
+### What spacenavd already provides
+
+From `example-spnavrc`, and it is more than a first look suggests:
+
+| | Options |
+|---|---|
+| Sensitivity | global, per half (`sensitivity-translation` / `-rotation`), and all six axes individually |
+| Dead zone | global, per logical axis, per device axis (`dead-zoneN`) |
+| Inversion / remap | `invert-rot`, `invert-trans`, `swap-yz`, `axismapN`, `bnmapN` |
+| Button actions | `bnactN`: `sensitivity-up/down/reset`, `disable-rotation`, `disable-translation`, `dominant-axis` |
+| Other | `led`, `grab`, `serial`, `repeat-interval` |
+
+`spnavcfg` is the GUI for these — the closest analogue to the 3DxWare control
+panel on Windows, with live preview. It is a separate package
+(`apt install spnavcfg`).
+
+### What it does not provide
+
+Three things, and none of them can live at the device layer:
+
+- **No response curve.** Grepping the option list for curve, exponent, accel,
+  response or smooth returns nothing; `sensitivity` is a bare multiply
+  (`src/event.c`). The bridge's `curve` exponent has no equivalent, and it is
+  what makes fine positioning near centre possible without losing top speed.
+- **No per-application profiles.** `/etc/spnavrc` is one global file. What
+  suits Onshape does not suit Blender, and the daemon cannot tell them apart.
+- **No notion of scene scale.** The bridge expresses pan speed in model
+  diagonals per second, so a bolt and an airframe feel alike. That needs
+  `model.extents` from the page, which exists only above the daemon.
+
+There is also a practical reason the bridge keeps its own dead zone and speeds
+even where `spnavrc` nominally covers them: **`/etc/spnavrc` is root-owned and
+there is no per-user config** (the README offers `/etc/spnavrc` or defaults,
+nothing else). A user without sudo cannot tune spacenavd at all. The bridge's
+settings live in `~/.config`, so for many users that is the only layer they
+can reach.
+
+### The interaction that will catch someone
+
+`sensitivity` multiplies before the bridge ever sees a value, and nothing
+clamps the result, so:
+
+```
+full scale = 350 x sensitivity
+```
+
+Raising sensitivity to suit FreeCAD silently invalidates the bridge's measured
+`fullScale`. Input then saturates early and browser CAD feels twitchy for a
+reason that has nothing to do with the bridge. Re-running `-calibrate` fixes
+it.
+
+This is visible rather than mysterious: the status page draws each axis
+against the configured full scale, so if `spnavrc` has drifted the bars peg
+before the cap reaches its stop.
+
+## Changing spacenavd's settings at runtime
+
+`spnavcfg` does not edit `/etc/spnavrc` directly — it asks the daemon, over
+the same UNIX socket the bridge already uses. That protocol is available to
+us, and the framing is one we already handle.
+
+From `src/proto.h`, requests reuse the 32-byte frame: a `type` field followed
+by seven `int32` slots, with request types at `REQ_BASE` (0x1000) and above,
+tagged `REQ_TAG` (0x7faa0000). Three tiers matter:
+
+| Opcode | Scope |
+|---|---|
+| `REQ_SET_SENS` / `REQ_GET_SENS` | **this client only** — affects the bridge's own stream |
+| `REQ_SCFG_SENS`, `REQ_SCFG_DEADZONE`, … | **global** — every application on the machine |
+| `REQ_CFG_SAVE` (0x3ffe) | writes `/etc/spnavrc`, performed by the daemon, which runs as root |
+
+Responses carry a status in slot 6: zero for success. Configuration requests
+need the native protocol v1 or later, and are unavailable over the X11
+magellan compatibility path.
+
+So a bridge-hosted UI **could** drive spacenavd, without root, exactly as
+`spnavcfg` does. Implementing it is modest: the framing is already handled in
+`internal/spacenav`; what is missing is request/response correlation and a
+handful of opcodes.
+
+Four things would have to be got right first, which is why it is not simply an
+extension of the existing sliders:
+
+1. **Global changes are global.** A slider in an Onshape-focused page that
+   silently retunes Blender is surprising. It belongs in its own clearly
+   labelled section, not among the per-application controls.
+2. **Global sensitivity invalidates calibration** by the relation above. The
+   bridge would know the multiplier, so it could rescale `fullScale` itself
+   rather than leaving the user to notice.
+3. **`REQ_CFG_SAVE` rewrites a root-owned system file** on behalf of a web
+   page. Sanctioned by design — it is how `spnavcfg` works — but it deserves
+   an explicit confirmation rather than riding along with a slider drag.
+4. **`REQ_SET_SENS` is per-client**, which is the honest place for anything
+   the bridge wants for itself alone. It is redundant with the bridge's own
+   scaling today, but it is the mechanism that keeps the layers from
+   fighting.
