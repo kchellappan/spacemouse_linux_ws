@@ -430,23 +430,67 @@ Responses carry a status in slot 6: zero for success. Configuration requests
 need the native protocol v1 or later, and are unavailable over the X11
 magellan compatibility path.
 
-So a bridge-hosted UI **could** drive spacenavd, without root, exactly as
-`spnavcfg` does. Implementing it is modest: the framing is already handled in
-`internal/spacenav`; what is missing is request/response correlation and a
-handful of opcodes.
+This is now implemented — see `internal/spacenav/proto.go` and `config.go`,
+and the **device** card on the status page.
 
-Four things would have to be got right first, which is why it is not simply an
-extension of the existing sliders:
+### Verified against a running daemon
 
-1. **Global changes are global.** A slider in an Onshape-focused page that
-   silently retunes Blender is surprising. It belongs in its own clearly
-   labelled section, not among the per-application controls.
-2. **Global sensitivity invalidates calibration** by the relation above. The
-   bridge would know the multiplier, so it could rescale `fullScale` itself
-   rather than leaving the user to notice.
+Opcodes are enum positions transcribed by counting, which cannot be trusted on
+inspection, so they were checked against spacenavd 1.2:
+
+| Request | Returned | Meaning |
+|---|---|---|
+| `REQ_GCFG_SENS` | `0x3F800000` | float **1.0** — the documented default sensitivity |
+| `REQ_GCFG_DEADZONE` axis 0 | `[0, 2]` | axis 0, dead zone **2** — the documented default |
+| `REQ_GCFG_SENS_AXIS` | six × 1.0 | per-axis defaults |
+| `REQ_DEV_NAME/NAXES/NBUTTONS` | status −1 | **unimplemented in 1.2** |
+
+Two things measurement changed. The `REQ_DEV_*` block does not exist in the
+spacenavd people actually have installed, so the axis count cannot be asked
+for; and probing dead zones cannot find it either, because axes past the
+device's real count answer 0 rather than refusing. Six is therefore fixed,
+matching the slots sensitivity and inversion already use.
+
+### Negotiation, and the trap in it
+
+The connection sends a bare `REQ_TAG | REQ_CHANGE_PROTO | 1` before any frame,
+and the daemon replies with a bare int32 whose low byte is the agreed version.
+Configuration needs version 1 or above.
+
+A daemon that predates negotiation **says nothing** — and may already be
+streaming events. Reading four bytes unconditionally therefore consumes part
+of the first event frame and misaligns every frame after it, silently and
+permanently. The implementation peeks through a buffered reader and discards
+only what carries the request tag. This was caught by the fake-daemon tests
+after passing every check against real hardware, because the real daemon
+always replies.
+
+Replies also share the socket and the 32-byte frame with device events, and
+are told apart by that tag: decoding one as motion would inject a garbage
+deflection into navigation.
+
+### What the UI exposes, and what it deliberately does not
+
+Global sensitivity, per-axis sensitivity, per-axis dead zone, per-axis
+inversion, and Y/Z swap — applied live, with an explicit **Save to
+/etc/spnavrc** performed by the daemon on the caller's behalf, and a reload to
+discard unsaved changes.
+
+`REQ_CFG_RESET` is implemented in the client but not offered by the page: it
+discards a user's entire tuning, and a button that does that beside sliders
+that do not is a trap.
+
+The four hazards identified before building are handled as follows:
+
+1. **Global changes are global.** The card says so, and sits apart from
+   anything per-application.
+2. **Global sensitivity invalidates calibration** by the relation above. Not
+   yet handled: changing it here still leaves the bridge's measured
+   `fullScale` stale until `-calibrate` is re-run. The axis bars make it
+   visible, but the bridge could rescale itself and should.
 3. **`REQ_CFG_SAVE` rewrites a root-owned system file** on behalf of a web
-   page. Sanctioned by design — it is how `spnavcfg` works — but it deserves
-   an explicit confirmation rather than riding along with a slider drag.
+   page. Sanctioned by design — it is how `spnavcfg` works — so it is its own
+   POST endpoint and its own button, never a side effect of a slider.
 4. **`REQ_SET_SENS` is per-client**, which is the honest place for anything
    the bridge wants for itself alone. It is redundant with the bridge's own
    scaling today, but it is the mechanism that keeps the layers from

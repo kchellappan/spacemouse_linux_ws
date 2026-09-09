@@ -16,7 +16,7 @@ import (
 func newHandler(t *testing.T) (*Handler, *logbuf.Buffer) {
 	t.Helper()
 	logs := logbuf.New(50)
-	return New(func() Snapshot { return Snapshot{Version: "test", Listen: "127.51.68.120:8181"} }, logs, nil), logs
+	return New(func() Snapshot { return Snapshot{Version: "test", Listen: "127.51.68.120:8181"} }, logs, nil, nil), logs
 }
 
 func TestStatusReturnsTheSnapshot(t *testing.T) {
@@ -131,7 +131,7 @@ func TestIndexIsNotServedForUnknownPaths(t *testing.T) {
 
 func handlerWithScene(t *testing.T, scenes SceneFactory) *Handler {
 	t.Helper()
-	return New(func() Snapshot { return Snapshot{Version: "test"} }, logbuf.New(10), scenes)
+	return New(func() Snapshot { return Snapshot{Version: "test"} }, logbuf.New(10), scenes, nil)
 }
 
 func TestSceneStreamsFrames(t *testing.T) {
