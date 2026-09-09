@@ -14,7 +14,7 @@ inline. Where something is inferred rather than observed, it says so.
 | [02-wire-protocol.md](02-wire-protocol.md) | WAMP v1 handshake, endpoints, message flow, captures |
 | [03-client-library-versions.md](03-client-library-versions.md) | 3dconnexion.js version differences and the matrix-layout trap |
 | [04-certificates-and-browser-trust.md](04-certificates-and-browser-trust.md) | TLS requirements, what failed, the working cert model |
-| [05-spacenavd.md](05-spacenavd.md) | What spacenavd provides; Linux desktop app landscape |
+| [05-spacenavd.md](05-spacenavd.md) | What spacenavd provides; the two tuning layers; its runtime config protocol |
 | [06-spacenav-ws.md](06-spacenav-ws.md) | Prior art: existing Python bridge, its design and gaps |
 | [07-onshape-integration.md](07-onshape-integration.md) | Platform sniff (resolved), verification procedure |
 | [08-distribution-plan.md](08-distribution-plan.md) | Language, packaging, install flow |
