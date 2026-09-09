@@ -197,11 +197,15 @@ func main() {
 		trust:     newTrustCache(paths, log),
 	}
 
+	// deviceStore is populated once drive mode opens the device; before that
+	// it reports itself unsupported rather than offering dead controls.
+	devices := &deviceStore{}
+
 	opts := server.Options{
 		Log:         log,
 		ServerIdent: "spacemouse-bridge " + version,
 		Clients:     ui.clients,
-		UI:          webui.New(ui.snapshot, logs, ui.newScene),
+		UI:          webui.New(ui.snapshot, logs, ui.newScene, devices),
 	}
 	// deviceDead is nil outside drive mode, and a nil channel blocks forever
 	// in a select, which is exactly the behaviour we want there.
@@ -221,6 +225,10 @@ func main() {
 		defer dev.Close()
 		device, deviceDead = dev, dev.Dead()
 		ui.device = dev
+		devices.dev = dev
+		if !dev.ConfigSupported() {
+			log.Warn("spacenavd is too old to configure from the status page; the event stream still works")
+		}
 
 		btns, err := server.ParseButtons(settings.ButtonSpec())
 		if err != nil {

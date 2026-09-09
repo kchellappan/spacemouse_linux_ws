@@ -10,8 +10,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kchellappan/spacemouse_linux_ws/internal/logbuf"
@@ -112,6 +114,34 @@ type SceneStepper func(dt time.Duration) SceneFrame
 // the whole reset mechanism, and needs no mutating endpoint to provide.
 type SceneFactory func() SceneStepper
 
+// DeviceConfig is spacenavd's machine-wide configuration as the page sees it.
+// Mirrored here rather than shared so the wire shape does not move whenever
+// the protocol client changes.
+type DeviceConfig struct {
+	// Supported is false against a daemon too old for the configuration
+	// protocol. The page then explains why instead of offering dead controls.
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason,omitempty"`
+
+	Sensitivity     float64    `json:"sensitivity"`
+	AxisSensitivity [6]float64 `json:"axisSensitivity"`
+	Deadzone        []int32    `json:"deadzone"`
+	Invert          [6]bool    `json:"invert"`
+	SwapYZ          bool       `json:"swapYZ"`
+}
+
+// DeviceConfigStore reads and writes spacenavd's own settings.
+//
+// These changes affect every application on the machine, and Save rewrites a
+// root-owned file, so this is deliberately its own endpoint rather than more
+// fields on a per-application one — the difference has to be visible.
+type DeviceConfigStore interface {
+	Read() (DeviceConfig, error)
+	Write(DeviceConfig) error
+	Save() error
+	Restore() error
+}
+
 // Source provides the current state. Implemented by main, which is the only
 // place that can see the device, the settings and the certificates at once.
 type Source func() Snapshot
@@ -122,13 +152,14 @@ type Handler struct {
 	source Source
 	logs   *logbuf.Buffer
 	scenes SceneFactory
+	device DeviceConfigStore
 }
 
 // New returns a handler serving the status UI. scenes may be nil, in which
 // case the test scene reports that it is unavailable rather than 404ing,
 // which is a clearer answer for a page that is already open.
-func New(source Source, logs *logbuf.Buffer, scenes SceneFactory) *Handler {
-	h := &Handler{mux: http.NewServeMux(), source: source, logs: logs, scenes: scenes}
+func New(source Source, logs *logbuf.Buffer, scenes SceneFactory, device DeviceConfigStore) *Handler {
+	h := &Handler{mux: http.NewServeMux(), source: source, logs: logs, scenes: scenes, device: device}
 
 	sub, err := fs.Sub(assets, "assets")
 	if err != nil {
@@ -141,6 +172,9 @@ func New(source Source, logs *logbuf.Buffer, scenes SceneFactory) *Handler {
 	h.mux.HandleFunc("/api/logs", h.logsHandler)
 	h.mux.HandleFunc("/api/events", h.events)
 	h.mux.HandleFunc("/api/scene", h.scene)
+	h.mux.HandleFunc("/api/device", h.deviceHandler)
+	h.mux.HandleFunc("/api/device/save", h.deviceSave)
+	h.mux.HandleFunc("/api/device/restore", h.deviceRestore)
 	h.mux.HandleFunc("/test", h.testPage)
 	h.mux.HandleFunc("/", h.index)
 	return h
@@ -169,6 +203,108 @@ func (h *Handler) page(w http.ResponseWriter, name string) {
 		"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(page)
+}
+
+// maxBody bounds a request that is a couple of hundred bytes in practice.
+const maxBody = 64 << 10
+
+// deviceHandler reads and writes spacenavd's machine-wide configuration.
+func (h *Handler) deviceHandler(w http.ResponseWriter, r *http.Request) {
+	if h.device == nil {
+		writeJSON(w, DeviceConfig{Reason: "the bridge is not reading a device"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg, err := h.device.Read()
+		if err != nil {
+			// Not an HTTP error: an old daemon is an ordinary state the page
+			// should explain, not a failure it should retry.
+			writeJSON(w, DeviceConfig{Reason: err.Error()})
+			return
+		}
+		writeJSON(w, cfg)
+
+	case http.MethodPut:
+		if err := requireJSON(r); err != nil {
+			http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
+			return
+		}
+		var cfg DeviceConfig
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&cfg); err != nil {
+			http.Error(w, "that is not valid device configuration JSON", http.StatusBadRequest)
+			return
+		}
+		if err := h.device.Write(cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.writeCurrentDevice(w)
+
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "use GET or PUT", http.StatusMethodNotAllowed)
+	}
+}
+
+// deviceSave persists spacenavd's settings to /etc/spnavrc.
+//
+// Its own endpoint because it is the one action here with an effect outside
+// this process: the daemon rewrites a root-owned system file on our behalf.
+// Riding along with a slider drag would hide that.
+func (h *Handler) deviceSave(w http.ResponseWriter, r *http.Request) {
+	h.deviceAction(w, r, func() error { return h.device.Save() })
+}
+
+// deviceRestore discards unsaved changes by reloading the file.
+func (h *Handler) deviceRestore(w http.ResponseWriter, r *http.Request) {
+	h.deviceAction(w, r, func() error { return h.device.Restore() })
+}
+
+func (h *Handler) deviceAction(w http.ResponseWriter, r *http.Request, do func() error) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "use POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.device == nil {
+		http.Error(w, "the bridge is not reading a device", http.StatusServiceUnavailable)
+		return
+	}
+	if err := requireJSON(r); err != nil {
+		http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
+		return
+	}
+	if err := do(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.writeCurrentDevice(w)
+}
+
+func (h *Handler) writeCurrentDevice(w http.ResponseWriter) {
+	cfg, err := h.device.Read()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, cfg)
+}
+
+// requireJSON enforces the content-type rule on every mutating endpoint.
+//
+// This is the control that actually stops a cross-origin write. CORS governs
+// whether a page may read a response, not whether the request is delivered: a
+// cross-origin POST with a simple content type still executes. Requiring
+// application/json makes the request non-simple, so the browser must
+// preflight, and nothing here answers a preflight. See
+// docs/10-configuration.md.
+func requireJSON(r *http.Request) error {
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		return fmt.Errorf("Content-Type must be application/json")
+	}
+	return nil
 }
 
 func (h *Handler) testPage(w http.ResponseWriter, r *http.Request) {

@@ -339,3 +339,159 @@ the multiply is
   directly, is the durable answer — a job for the status UI.
 - Shipping a measured calibration in the package would be ceremony: it would
   record 350, which is what the built-in default already is.
+
+## Two layers of tuning, and which owns what
+
+Settings live in two places, and confusing them is the likeliest support
+question once colleagues start using `spnavcfg`.
+
+```
+device ──► spacenavd ──┬──► FreeCAD, Blender, Meshlab (libspnav)   ← spnavrc only
+                       │
+                       └──► spacemouse-bridge ──► WAMP ──► Onshape ← spnavrc, then ours
+```
+
+Everything the bridge's web UI changes lives in `internal/nav` and runs
+*after* events are read from the daemon, so it affects browser CAD only.
+Native libspnav clients never see it.
+
+### What spacenavd already provides
+
+From `example-spnavrc`, and it is more than a first look suggests:
+
+| | Options |
+|---|---|
+| Sensitivity | global, per half (`sensitivity-translation` / `-rotation`), and all six axes individually |
+| Dead zone | global, per logical axis, per device axis (`dead-zoneN`) |
+| Inversion / remap | `invert-rot`, `invert-trans`, `swap-yz`, `axismapN`, `bnmapN` |
+| Button actions | `bnactN`: `sensitivity-up/down/reset`, `disable-rotation`, `disable-translation`, `dominant-axis` |
+| Other | `led`, `grab`, `serial`, `repeat-interval` |
+
+`spnavcfg` is the GUI for these — the closest analogue to the 3DxWare control
+panel on Windows, with live preview. It is a separate package
+(`apt install spnavcfg`).
+
+### What it does not provide
+
+Three things, and none of them can live at the device layer:
+
+- **No response curve.** Grepping the option list for curve, exponent, accel,
+  response or smooth returns nothing; `sensitivity` is a bare multiply
+  (`src/event.c`). The bridge's `curve` exponent has no equivalent, and it is
+  what makes fine positioning near centre possible without losing top speed.
+- **No per-application profiles.** `/etc/spnavrc` is one global file. What
+  suits Onshape does not suit Blender, and the daemon cannot tell them apart.
+- **No notion of scene scale.** The bridge expresses pan speed in model
+  diagonals per second, so a bolt and an airframe feel alike. That needs
+  `model.extents` from the page, which exists only above the daemon.
+
+There is also a practical reason the bridge keeps its own dead zone and speeds
+even where `spnavrc` nominally covers them: **`/etc/spnavrc` is root-owned and
+there is no per-user config** (the README offers `/etc/spnavrc` or defaults,
+nothing else). A user without sudo cannot tune spacenavd at all. The bridge's
+settings live in `~/.config`, so for many users that is the only layer they
+can reach.
+
+### The interaction that will catch someone
+
+`sensitivity` multiplies before the bridge ever sees a value, and nothing
+clamps the result, so:
+
+```
+full scale = 350 x sensitivity
+```
+
+Raising sensitivity to suit FreeCAD silently invalidates the bridge's measured
+`fullScale`. Input then saturates early and browser CAD feels twitchy for a
+reason that has nothing to do with the bridge. Re-running `-calibrate` fixes
+it.
+
+This is visible rather than mysterious: the status page draws each axis
+against the configured full scale, so if `spnavrc` has drifted the bars peg
+before the cap reaches its stop.
+
+## Changing spacenavd's settings at runtime
+
+`spnavcfg` does not edit `/etc/spnavrc` directly — it asks the daemon, over
+the same UNIX socket the bridge already uses. That protocol is available to
+us, and the framing is one we already handle.
+
+From `src/proto.h`, requests reuse the 32-byte frame: a `type` field followed
+by seven `int32` slots, with request types at `REQ_BASE` (0x1000) and above,
+tagged `REQ_TAG` (0x7faa0000). Three tiers matter:
+
+| Opcode | Scope |
+|---|---|
+| `REQ_SET_SENS` / `REQ_GET_SENS` | **this client only** — affects the bridge's own stream |
+| `REQ_SCFG_SENS`, `REQ_SCFG_DEADZONE`, … | **global** — every application on the machine |
+| `REQ_CFG_SAVE` (0x3ffe) | writes `/etc/spnavrc`, performed by the daemon, which runs as root |
+
+Responses carry a status in slot 6: zero for success. Configuration requests
+need the native protocol v1 or later, and are unavailable over the X11
+magellan compatibility path.
+
+This is now implemented — see `internal/spacenav/proto.go` and `config.go`,
+and the **device** card on the status page.
+
+### Verified against a running daemon
+
+Opcodes are enum positions transcribed by counting, which cannot be trusted on
+inspection, so they were checked against spacenavd 1.2:
+
+| Request | Returned | Meaning |
+|---|---|---|
+| `REQ_GCFG_SENS` | `0x3F800000` | float **1.0** — the documented default sensitivity |
+| `REQ_GCFG_DEADZONE` axis 0 | `[0, 2]` | axis 0, dead zone **2** — the documented default |
+| `REQ_GCFG_SENS_AXIS` | six × 1.0 | per-axis defaults |
+| `REQ_DEV_NAME/NAXES/NBUTTONS` | status −1 | **unimplemented in 1.2** |
+
+Two things measurement changed. The `REQ_DEV_*` block does not exist in the
+spacenavd people actually have installed, so the axis count cannot be asked
+for; and probing dead zones cannot find it either, because axes past the
+device's real count answer 0 rather than refusing. Six is therefore fixed,
+matching the slots sensitivity and inversion already use.
+
+### Negotiation, and the trap in it
+
+The connection sends a bare `REQ_TAG | REQ_CHANGE_PROTO | 1` before any frame,
+and the daemon replies with a bare int32 whose low byte is the agreed version.
+Configuration needs version 1 or above.
+
+A daemon that predates negotiation **says nothing** — and may already be
+streaming events. Reading four bytes unconditionally therefore consumes part
+of the first event frame and misaligns every frame after it, silently and
+permanently. The implementation peeks through a buffered reader and discards
+only what carries the request tag. This was caught by the fake-daemon tests
+after passing every check against real hardware, because the real daemon
+always replies.
+
+Replies also share the socket and the 32-byte frame with device events, and
+are told apart by that tag: decoding one as motion would inject a garbage
+deflection into navigation.
+
+### What the UI exposes, and what it deliberately does not
+
+Global sensitivity, per-axis sensitivity, per-axis dead zone, per-axis
+inversion, and Y/Z swap — applied live, with an explicit **Save to
+/etc/spnavrc** performed by the daemon on the caller's behalf, and a reload to
+discard unsaved changes.
+
+`REQ_CFG_RESET` is implemented in the client but not offered by the page: it
+discards a user's entire tuning, and a button that does that beside sliders
+that do not is a trap.
+
+The four hazards identified before building are handled as follows:
+
+1. **Global changes are global.** The card says so, and sits apart from
+   anything per-application.
+2. **Global sensitivity invalidates calibration** by the relation above. Not
+   yet handled: changing it here still leaves the bridge's measured
+   `fullScale` stale until `-calibrate` is re-run. The axis bars make it
+   visible, but the bridge could rescale itself and should.
+3. **`REQ_CFG_SAVE` rewrites a root-owned system file** on behalf of a web
+   page. Sanctioned by design — it is how `spnavcfg` works — so it is its own
+   POST endpoint and its own button, never a side effect of a slider.
+4. **`REQ_SET_SENS` is per-client**, which is the honest place for anything
+   the bridge wants for itself alone. It is redundant with the bridge's own
+   scaling today, but it is the mechanism that keeps the layers from
+   fighting.

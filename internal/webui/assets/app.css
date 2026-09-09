@@ -79,3 +79,24 @@ canvas { display: block; width: 100%; background: transparent; }
 header a { color: var(--accent); text-decoration: none; }
 header a:hover { text-decoration: underline; }
 #intro { max-width: 46rem; }
+
+.warnbox {
+  border-left: 3px solid var(--warn); padding: .35rem .7rem; margin: 0 0 .8rem;
+  background: color-mix(in srgb, var(--warn) 7%, transparent); border-radius: 0 5px 5px 0;
+}
+.tune { display: grid; grid-template-columns: 9rem 1fr 4rem; align-items: center; gap: .6rem; margin-bottom: .35rem; }
+.tune label { color: var(--dim); font-size: .84rem; }
+.tune input[type=range] { width: 100%; accent-color: var(--accent); }
+.tune output { font-family: var(--mono); font-size: .8rem; text-align: right; }
+.tune.check { grid-template-columns: 9rem 1fr; }
+.tune.check input { justify-self: start; width: 1rem; height: 1rem; accent-color: var(--accent); }
+.devgrid { display: grid; gap: 0 1.4rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.devgroup h3 { font-size: .74rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--dim); margin: .3rem 0 .5rem; font-weight: 600; }
+.tune-actions { display: flex; align-items: center; gap: .6rem; margin-top: 1rem; flex-wrap: wrap; }
+button { font: inherit; font-size: .84rem; padding: .32rem .9rem; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+#dev-status.bad { color: var(--bad); }
+#dev-status.ok { color: var(--ok); }

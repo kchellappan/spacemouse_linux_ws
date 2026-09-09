@@ -47,6 +47,24 @@
     </section>
 
     <section class="card" style="grid-column: 1 / -1">
+      <h2>device &mdash; spacenavd</h2>
+      <p class="meta warnbox" id="dev-scope">
+        These are <strong>spacenavd's own settings</strong> and apply to every
+        application on this machine &mdash; FreeCAD and Blender as well as
+        browser CAD. Changes take effect immediately but are lost when
+        spacenavd restarts until you save them to <code>/etc/spnavrc</code>,
+        which the daemon writes on your behalf.
+      </p>
+      <div id="dev-unsupported" class="empty" hidden></div>
+      <div id="device"></div>
+      <div class="tune-actions" id="dev-actions" hidden>
+        <button id="dev-save" type="button">Save to /etc/spnavrc</button>
+        <button id="dev-reload" type="button" class="ghost">Reload from file</button>
+        <span class="meta" id="dev-status"></span>
+      </div>
+    </section>
+
+    <section class="card" style="grid-column: 1 / -1">
       <h2>connected pages</h2>
       <table>
         <thead><tr>
